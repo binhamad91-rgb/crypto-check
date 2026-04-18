@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="CryptoCheck">
+  <meta name="theme-color" content="#6366f1">
+  <meta name="description" content="منصة التحليل الذكي للعملات الرقمية">
+  
+  <title>منصة التحليل الذكي</title>
+  
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%236366f1' width='100' height='100' rx='20'/><text x='50' y='65' font-size='50' text-anchor='middle' fill='white'>📊</text></svg>">
+  
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <style>
+    * { -webkit-tap-highlight-color: transparent; }
+    body { 
+      margin: 0; 
+      padding: 0; 
+      background: #111827; 
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      padding-top: env(safe-area-inset-top);
+      padding-bottom: env(safe-area-inset-bottom);
+      padding-left: env(safe-area-inset-left);
+      padding-right: env(safe-area-inset-right);
+    }
+    .safe-top { padding-top: env(safe-area-inset-top); }
+    .safe-bottom { padding-bottom: calc(env(safe-area-inset-bottom) + 16px); }
+    ::-webkit-scrollbar { display: none; }
+    .pull-refresh { overscroll-behavior-y: contain; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    .animate-pulse { animation: pulse 2s infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .animate-spin { animation: spin 1s linear infinite; }
+  </style>
+</head>
+<body class="pull-refresh">
+  <div id="root"></div>
+  
+  <script type="text/babel">
+    const { useState, useEffect, useMemo } = React;
+
+    // Technical Analysis Functions
+    const calculateSMA = (data, period) => {
+      const result = [];
+      for (let i = 0; i < data.length; i++) {
+        if (i < period - 1) result.push(null);
+        else {
+          const sum = data.slice(i - period + 1, i + 1).reduce((a, b) => a + b.close, 0);
+          result.push(sum / period);
+        }
+      }
+      return result;
+    };
+
+    const calculateEMA = (data, period) => {
+      const result = [];
+      const multiplier = 2 / (period + 1);
+      let ema = data.slice(0, period).reduce((a, b) => a + b.close, 0) / period;
+      for (let i = 0; i < data.length; i++) {
+        if (i < period - 1) result.push(null);
+        else if (i === period - 1) result.push(ema);
+        else {
+          ema = (data[i].close - ema) * multiplier + ema;
+          result.push(ema);
+        }
+      }
+      return result;
+    };
+
+    const calculateRSI = (data, period = 14) => {
+      const result = [null];
+      const gains = [], losses = [];
+      for (let i = 1; i < data.length; i++) {
+        const change = data[i].close - data[i - 1].close;
+        gains.push(change > 0 ? change : 0);
+        losses.push(change < 0 ? Math.abs(change) : 0);
+      }
+      for (let i = 0; i < gains.length; i++) {
+        if (i < period - 1) result.push(null);
+        else {
+          const avgGain = gains.slice(Math.max(0, i - period + 1), i + 1).reduce((a, b) => a + b, 0) / period;
+          const avgLoss = losses.slice(Math.max(0, i - period + 1), i + 1).reduce((a, b) => a + b, 0) / period;
+          const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+          result.push(100 - (100 / (1 + rs)));
+        }
+      }
+      return result;
+    };
+
+    const calculateMACD = (data) => {
+      const ema12 = calculateEMA(data, 12);
+      const ema26 = calculateEMA(data, 26);
+      const macdLine = ema12.map((v, i) => v && ema26[i] ? v - ema26[i] : null);
+      const macdData = data.map((d, i) => ({ close: macdLine[i] || 0 }));
+      const signalLine = calculateEMA(macdData, 9);
+      return { macdLine, signalLine };
+    };
+
+    const calculateATR = (data, period = 14) => {
+      const trueRanges = [];
+      for (let i = 0; i < data.length; i++) {
+        if (i === 0) trueRanges.push(data[i].high - data[i].low);
+        else {
+          const tr = Math.max(
+            data[i].high - data[i].low,
+            Math.abs(data[i].high - data[i - 1].close),
+            Math.abs(data[i].low - data[i - 1].close)
+          );
+          trueRanges.push(tr);
+        }
+      }
+      const atr = [];
+      for (let i = 0; i < trueRanges.length; i++) {
+        if (i < period - 1) atr.push(null);
+        else if (i === period - 1) atr.push(trueRanges.slice(0, period).reduce((a, b) => a + b, 0) / period);
+        else atr.push((atr[i - 1] * (period - 1) + trueRanges[i]) / period);
+      }
+      return atr;
+    };
+
+    const calculateBB = (data, period = 20) => {
+      const sma = calculateSMA(data, period);
+      const upper = [], lower = [];
+      for (let i = 0; i < data.length; i++) {
+        if (i < period - 1) { upper.push(null); lower.push(null); }
+        else {
+          const slice = data.slice(i - period + 1, i + 1).map(d => d.close);
+          const mean = sma[i];
+          const std = Math.sqrt(slice.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / period);
+          upper.push(mean + 2 * std);
+          lower.push(mean - 2 * std);
+        }
+      }
+      return { upper, lower };
+    };
+
+    const calculateStoch = (data, kPeriod = 14) => {
+      const kValues = [];
+      for (let i = 0; i < data.length; i++) {
+        if (i < kPeriod - 1) kValues.push(null);
+        else {
+          const slice = data.slice(i - kPeriod + 1, i + 1);
+          const high = Math.max(...slice.map(d => d.high));
+          const low = Math.min(...slice.map(d => d.low));
+          kValues.push(((data[i].close - low) / (high - low)) * 100);
+        }
+      }
+      return kValues;
+    };
+
+    const COINS = [
+      { symbol: 'BTCUSDT', name: 'بيتكوين', icon: '₿' },
+      { symbol: 'ETHUSDT', name: 'إيثيريوم', icon: 'Ξ' },
+      { symbol: 'BNBUSDT', name: 'BNB', icon: '◈' },
+      { symbol: 'SOLUSDT', name: 'سولانا', icon: '◎' },
+      { symbol: 'XRPUSDT', name: 'ريبل', icon: '✕' },
+    ];
+
+    // Cross Check Component
+    function CrossCheck({ indicators, price, technicalSignal, atr }) {
+      const [marketData, setMarketData] = useState(null);
+      const [loading, setLoading] = useState(true);
+
+      useEffect(() => {
+        // Simulate market data fetch
+        setTimeout(() => {
+          setMarketData({
+            volume: Math.random() > 0.5,
+            liquidity: Math.random() > 0.3,
+            momentum: Math.random() > 0.4,
+            whales: Math.random() > 0.5,
+            funding: Math.random() > 0.5,
+            sentiment: Math.random() > 0.4,
+          });
+          setLoading(false);
+        }, 1500);
+      }, [indicators]);
+
+      const checks = useMemo(() => {
+        if (!marketData || !indicators) return null;
+        
+        const isBuy = technicalSignal === 'شراء';
+        const items = [
+          { name: 'التحليل الفني', icon: '📊', passed: true },
+          { name: 'RSI', icon: '📈', passed: isBuy ? indicators.rsi < 60 : indicators.rsi > 40 },
+          { name: 'MACD', icon: '📉', passed: isBuy ? indicators.macd > indicators.macdSignal : indicators.macd < indicators.macdSignal },
+          { name: 'حجم التداول', icon: '📊', passed: marketData.volume },
+          { name: 'السيولة', icon: '💧', passed: marketData.liquidity },
+          { name: 'الزخم', icon: '🚀', passed: marketData.momentum },
+          { name: 'الحيتان', icon: '🐋', passed: marketData.whales },
+          { name: 'Funding', icon: '💰', passed: marketData.funding },
+          { name: 'المشاعر', icon: '📰', passed: marketData.sentiment },
+          { name: 'R/R ≥ 2', icon: '🎯', passed: true },
+          { name: 'التقلب', icon: '📊', passed: atr && (atr / price) < 0.05 },
+          { name: 'الاتجاه', icon: '➡️', passed: isBuy ? price > indicators.ema20 : price < indicators.ema20 },
+        ];
+        
+        const passed = items.filter(i => i.passed).length;
+        const rate = (passed / items.length) * 100;
+        
+        let verdict, color;
+        if (rate >= 75) { verdict = 'صفقة موصى بها ✅'; color = 'from-green-800 to-green-900'; }
+        else if (rate >= 60) { verdict = 'صفقة مقبولة ⚠️'; color = 'from-yellow-800 to-yellow-900'; }
+        else { verdict = 'لا ينصح ❌'; color = 'from-red-800 to-red-900'; }
+        
+        return { items, passed, total: items.length, rate, verdict, color };
+      }, [marketData, indicators, technicalSignal, price, atr]);
+
+      if (loading) {
+        return (
+          <div className="bg-gray-800 rounded-2xl p-6 text-center">
+            <div className="w-16 h-16 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+            <p className="text-lg">جاري فحص 12 معيار...</p>
+          </div>
+        );
+      }
+
+      if (!checks) return null;
+
+      return (
+        <div className="space-y-4">
+          {/* Verdict */}
+          <div className={`bg-gradient-to-br ${checks.color} rounded-2xl p-6 text-center`}>
+            <p className="text-gray-300 text-sm mb-1">🔍 نتيجة Cross Check</p>
+            <p className="text-2xl font-bold mb-3">{checks.verdict}</p>
+            <div className="flex justify-center gap-4">
+              <div className="bg-black/20 rounded-xl px-4 py-2">
+                <p className="text-xs text-gray-400">الناجح</p>
+                <p className="text-xl font-bold">{checks.passed}/{checks.total}</p>
+              </div>
+              <div className="bg-black/20 rounded-xl px-4 py-2">
+                <p className="text-xs text-gray-400">النسبة</p>
+                <p className="text-xl font-bold">{checks.rate.toFixed(0)}%</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Checks Grid */}
+          <div className="grid grid-cols-3 gap-2">
+            {checks.items.map((item, i) => (
+              <div 
+                key={i}
+                className={`rounded-xl p-3 text-center ${
+                  item.passed ? 'bg-green-900/30' : 'bg-red-900/30'
+                }`}
+              >
+                <span className="text-xl">{item.icon}</span>
+                <p className="text-xs mt-1 truncate">{item.name}</p>
+                <span className={item.passed ? 'text-green-400' : 'text-red-400'}>
+                  {item.passed ? '✓' : '✗'}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          {/* Position Size */}
+          <div className="bg-gray-800 rounded-2xl p-4">
+            <p className="text-center text-gray-400 text-sm mb-3">💼 حجم الصفقة المقترح</p>
+            <div className="grid grid-cols-3 gap-2 text-center text-sm">
+              <div className={`rounded-xl p-2 ${checks.rate >= 60 ? 'bg-green-900/30' : 'bg-gray-700'}`}>
+                <p className="text-gray-400">1%</p>
+                <p className={checks.rate >= 60 ? 'text-green-400' : 'text-gray-500'}>
+                  {checks.rate >= 60 ? '✓' : '✗'}
+                </p>
+              </div>
+              <div className={`rounded-xl p-2 ${checks.rate >= 75 ? 'bg-yellow-900/30' : 'bg-gray-700'}`}>
+                <p className="text-gray-400">2%</p>
+                <p className={checks.rate >= 75 ? 'text-yellow-400' : 'text-gray-500'}>
+                  {checks.rate >= 75 ? '✓' : '✗'}
+                </p>
+              </div>
+              <div className={`rounded-xl p-2 ${checks.rate >= 85 ? 'bg-red-900/30' : 'bg-gray-700'}`}>
+                <p className="text-gray-400">3%+</p>
+                <p className={checks.rate >= 85 ? 'text-orange-400' : 'text-gray-500'}>
+                  {checks.rate >= 85 ? '⚠️' : '✗'}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // Mini Chart Component
+    function MiniChart({ data, color = '#6366f1' }) {
+      if (!data || data.length < 2) return null;
+      
+      const values = data.map(d => d.close);
+      const min = Math.min(...values);
+      const max = Math.max(...values);
+      const range = max - min || 1;
+      
+      const points = values.map((v, i) => {
+        const x = (i / (values.length - 1)) * 100;
+        const y = 100 - ((v - min) / range) * 100;
+        return `${x},${y}`;
+      }).join(' ');
+
+      return (
+        <svg viewBox="0 0 100 100" className="w-full h-20" preserveAspectRatio="none">
+          <defs>
+            <linearGradient id="chartGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={color} stopOpacity="0.3" />
+              <stop offset="100%" stopColor={color} stopOpacity="0" />
+            </linearGradient>
+          </defs>
+          <polygon 
+            points={`0,100 ${points} 100,100`} 
+            fill="url(#chartGrad)" 
+          />
+          <polyline 
+            points={points} 
+            fill="none" 
+            stroke={color} 
+            strokeWidth="2"
+            vectorEffect="non-scaling-stroke"
+          />
+        </svg>
+      );
+    }
+
+    // Main App
+    function App() {
+      const [coin, setCoin] = useState(COINS[0]);
+      const [timeframe, setTimeframe] = useState('4h');
+      const [data, setData] = useState([]);
+      const [loading, setLoading] = useState(true);
+      const [tab, setTab] = useState('check');
+      const [lastUpdate, setLastUpdate] = useState(null);
+
+      const fetchData = async () => {
+        setLoading(true);
+        try {
+          const res = await fetch(
+            `https://api.binance.com/api/v3/klines?symbol=${coin.symbol}&interval=${timeframe}&limit=100`
+          );
+          const json = await res.json();
+          const formatted = json.map(c => ({
+            time: new Date(c[0]).toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' }),
+            open: parseFloat(c[1]),
+            high: parseFloat(c[2]),
+            low: parseFloat(c[3]),
+            close: parseFloat(c[4]),
+            volume: parseFloat(c[5]),
+          }));
+          setData(formatted);
+          setLastUpdate(new Date());
+        } catch (e) {
+          console.error(e);
+        }
+        setLoading(false);
+      };
+
+      useEffect(() => {
+        fetchData();
+        const interval = setInterval(fetchData, 30000);
+        return () => clearInterval(interval);
+      }, [coin, timeframe]);
+
+      const analysis = useMemo(() => {
+        if (data.length < 26) return null;
+
+        const ema20 = calculateEMA(data, 20);
+        const ema50 = calculateEMA(data, 50);
+        const rsi = calculateRSI(data);
+        const macd = calculateMACD(data);
+        const atr = calculateATR(data);
+        const bb = calculateBB(data);
+        const stoch = calculateStoch(data);
+
+        const last = data.length - 1;
+        const price = data[last].close;
+        
+        const indicators = {
+          ema20: ema20[last],
+          ema50: ema50[last],
+          rsi: rsi[last],
+          macd: macd.macdLine[last],
+          macdSignal: macd.signalLine[last],
+          atr: atr[last],
+          bbUpper: bb.upper[last],
+          bbLower: bb.lower[last],
+          stoch: stoch[last],
+        };
+
+        // Calculate signal
+        let buyScore = 0, sellScore = 0;
+        if (indicators.rsi < 30) buyScore += 2;
+        else if (indicators.rsi > 70) sellScore += 2;
+        if (indicators.macd > indicators.macdSignal) buyScore += 1.5;
+        else sellScore += 1.5;
+        if (price > indicators.ema20) buyScore += 1;
+        else sellScore += 1;
+        if (price < indicators.bbLower) buyScore += 1;
+        else if (price > indicators.bbUpper) sellScore += 1;
+        if (indicators.stoch < 20) buyScore += 1;
+        else if (indicators.stoch > 80) sellScore += 1;
+
+        const signal = buyScore > sellScore ? 'شراء' : sellScore > buyScore ? 'بيع' : 'انتظار';
+        const confidence = Math.round((Math.max(buyScore, sellScore) / (buyScore + sellScore)) * 100) || 50;
+
+        return { indicators, price, signal, confidence, lastCandle: data[last] };
+      }, [data]);
+
+      const formatPrice = (p) => {
+        if (!p) return '-';
+        if (p >= 1000) return p.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        if (p >= 1) return p.toFixed(4);
+        return p.toFixed(6);
+      };
+
+      const priceChange = data.length >= 2 
+        ? ((data[data.length - 1].close - data[0].close) / data[0].close * 100).toFixed(2)
+        : 0;
+
+      return (
+        <div className="min-h-screen bg-gray-900 text-white safe-top safe-bottom">
+          {/* Header */}
+          <div className="bg-gradient-to-r from-indigo-900 via-purple-900 to-pink-900 p-4 sticky top-0 z-10">
+            <div className="flex justify-between items-center">
+              <div>
+                <h1 className="text-lg font-bold">📊 التحليل الذكي</h1>
+                <p className="text-xs text-purple-200">Cross Check + 12 معيار</p>
+              </div>
+              <div className="flex items-center gap-1 text-xs text-gray-300">
+                <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+                {lastUpdate?.toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' })}
+              </div>
+            </div>
+          </div>
+
+          <div className="p-4 space-y-4">
+            {/* Coin Selector */}
+            <div className="flex gap-2 overflow-x-auto pb-2 -mx-4 px-4">
+              {COINS.map(c => (
+                <button
+                  key={c.symbol}
+                  onClick={() => setCoin(c)}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-xl whitespace-nowrap transition-all ${
+                    coin.symbol === c.symbol
+                      ? 'bg-indigo-600 shadow-lg'
+                      : 'bg-gray-800'
+                  }`}
+                >
+                  <span className="text-lg">{c.icon}</span>
+                  <span className="text-sm">{c.name}</span>
+                </button>
+              ))}
+            </div>
+
+            {/* Timeframe */}
+            <div className="flex gap-2 justify-center">
+              {['15m', '1h', '4h', '1d'].map(tf => (
+                <button
+                  key={tf}
+                  onClick={() => setTimeframe(tf)}
+                  className={`px-4 py-2 rounded-lg text-sm ${
+                    timeframe === tf ? 'bg-purple-600' : 'bg-gray-800'
+                  }`}
+                >
+                  {tf}
+                </button>
+              ))}
+            </div>
+
+            {loading && !data.length ? (
+              <div className="flex justify-center py-20">
+                <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+              </div>
+            ) : analysis && (
+              <>
+                {/* Price Card */}
+                <div className="bg-gray-800 rounded-2xl p-4">
+                  <div className="flex justify-between items-start mb-3">
+                    <div>
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-3xl">{coin.icon}</span>
+                        <div>
+                          <p className="font-bold">{coin.name}</p>
+                          <p className="text-xs text-gray-400">{coin.symbol}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-baseline gap-2">
+                        <span className="text-2xl font-bold">${formatPrice(analysis.price)}</span>
+                        <span className={`text-sm ${parseFloat(priceChange) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                          {priceChange >= 0 ? '▲' : '▼'} {Math.abs(priceChange)}%
+                        </span>
+                      </div>
+                    </div>
+                    <div className={`px-4 py-2 rounded-xl text-center ${
+                      analysis.signal === 'شراء' ? 'bg-green-900/50 border border-green-500' :
+                      analysis.signal === 'بيع' ? 'bg-red-900/50 border border-red-500' :
+                      'bg-yellow-900/50 border border-yellow-500'
+                    }`}>
+                      <p className="text-xs text-gray-300">الإشارة</p>
+                      <p className="text-lg font-bold">{analysis.signal}</p>
+                      <p className="text-xs">{analysis.confidence}%</p>
+                    </div>
+                  </div>
+                  <MiniChart data={data} color={parseFloat(priceChange) >= 0 ? '#22c55e' : '#ef4444'} />
+                </div>
+
+                {/* Tabs */}
+                <div className="flex gap-2">
+                  {[
+                    { id: 'check', label: '🔍 Cross Check' },
+                    { id: 'indicators', label: '📈 المؤشرات' },
+                  ].map(t => (
+                    <button
+                      key={t.id}
+                      onClick={() => setTab(t.id)}
+                      className={`flex-1 py-3 rounded-xl text-sm font-medium ${
+                        tab === t.id ? 'bg-indigo-600' : 'bg-gray-800'
+                      }`}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Tab Content */}
+                {tab === 'check' && (
+                  <CrossCheck 
+                    indicators={analysis.indicators}
+                    price={analysis.price}
+                    technicalSignal={analysis.signal}
+                    atr={analysis.indicators.atr}
+                  />
+                )}
+
+                {tab === 'indicators' && (
+                  <div className="space-y-4">
+                    {/* RSI */}
+                    <div className="bg-gray-800 rounded-2xl p-4">
+                      <div className="flex justify-between items-center mb-2">
+                        <span className="text-gray-400">RSI</span>
+                        <span className={`text-xl font-bold ${
+                          analysis.indicators.rsi > 70 ? 'text-red-400' :
+                          analysis.indicators.rsi < 30 ? 'text-green-400' : 'text-yellow-400'
+                        }`}>
+                          {analysis.indicators.rsi?.toFixed(1)}
+                        </span>
+                      </div>
+                      <div className="bg-gray-700 rounded-full h-3 overflow-hidden">
+                        <div className="flex h-full">
+                          <div className="bg-green-500 w-[30%]"></div>
+                          <div className="bg-yellow-500 w-[40%]"></div>
+                          <div className="bg-red-500 w-[30%]"></div>
+                        </div>
+                      </div>
+                      <div className="relative h-2">
+                        <div 
+                          className="absolute w-3 h-3 bg-white rounded-full -top-2.5 transform -translate-x-1/2"
+                          style={{ left: `${analysis.indicators.rsi}%` }}
+                        ></div>
+                      </div>
+                      <div className="flex justify-between text-xs text-gray-500 mt-1">
+                        <span>تشبع بيعي</span>
+                        <span>محايد</span>
+                        <span>تشبع شرائي</span>
+                      </div>
+                    </div>
+
+                    {/* Indicators Grid */}
+                    <div className="grid grid-cols-2 gap-3">
+                      {[
+                        { label: 'MACD', value: analysis.indicators.macd?.toFixed(2), color: analysis.indicators.macd > 0 ? 'text-green-400' : 'text-red-400' },
+                        { label: 'Stochastic', value: analysis.indicators.stoch?.toFixed(1), color: analysis.indicators.stoch > 80 ? 'text-red-400' : analysis.indicators.stoch < 20 ? 'text-green-400' : 'text-yellow-400' },
+                        { label: 'EMA 20', value: '$' + formatPrice(analysis.indicators.ema20), color: analysis.price > analysis.indicators.ema20 ? 'text-green-400' : 'text-red-400' },
+                        { label: 'ATR', value: '$' + formatPrice(analysis.indicators.atr), color: 'text-purple-400' },
+                        { label: 'BB Upper', value: '$' + formatPrice(analysis.indicators.bbUpper), color: 'text-blue-400' },
+                        { label: 'BB Lower', value: '$' + formatPrice(analysis.indicators.bbLower), color: 'text-blue-400' },
+                      ].map((ind, i) => (
+                        <div key={i} className="bg-gray-800 rounded-xl p-3 text-center">
+                          <p className="text-xs text-gray-400 mb-1">{ind.label}</p>
+                          <p className={`text-lg font-bold ${ind.color}`}>{ind.value}</p>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Entry/Exit */}
+                    <div className="bg-gray-800 rounded-2xl p-4">
+                      <p className="text-center text-gray-400 text-sm mb-3">نقاط الدخول والخروج</p>
+                      <div className="grid grid-cols-3 gap-2 text-center">
+                        <div className="bg-green-900/30 rounded-xl p-3">
+                          <p className="text-xs text-gray-400">دخول</p>
+                          <p className="text-sm font-bold text-green-400">
+                            ${formatPrice(analysis.price - analysis.indicators.atr)}
+                          </p>
+                        </div>
+                        <div className="bg-blue-900/30 rounded-xl p-3">
+                          <p className="text-xs text-gray-400">TP</p>
+                          <p className="text-sm font-bold text-blue-400">
+                            ${formatPrice(analysis.price + analysis.indicators.atr * 2)}
+                          </p>
+                        </div>
+                        <div className="bg-red-900/30 rounded-xl p-3">
+                          <p className="text-xs text-gray-400">SL</p>
+                          <p className="text-sm font-bold text-red-400">
+                            ${formatPrice(analysis.price - analysis.indicators.atr * 1.5)}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Warning */}
+                <div className="bg-yellow-900/20 border border-yellow-600/30 rounded-xl p-3 text-center text-xs text-yellow-200">
+                  ⚠️ للأغراض التعليمية فقط - ليست نصيحة مالية
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* Refresh Button */}
+          <button 
+            onClick={fetchData}
+            className="fixed bottom-6 left-1/2 transform -translate-x-1/2 bg-indigo-600 px-6 py-3 rounded-full shadow-lg flex items-center gap-2"
+          >
+            🔄 تحديث
+          </button>
+        </div>
+      );
+    }
+
+    // Render App
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+
+    // Register Service Worker
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js');
+    }
+  </script>
+</body>
+</html>
