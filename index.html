@@ -1,0 +1,1569 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="AQ Pro">
+  <meta name="theme-color" content="#6366f1">
+  <title>⚡ AQ Pro - المنصة الشاملة</title>
+  
+  <link rel="manifest" href="manifest.json">
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+  
+  <style>
+    * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
+    body { 
+      margin: 0; padding: 0; background: #0a0a0f; 
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    }
+    ::-webkit-scrollbar { display: none; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes slideUp { from { opacity: 0; transform: translateY(30px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes shake { 0%, 100% { transform: translateX(0); } 10%, 30%, 50%, 70%, 90% { transform: translateX(-5px); } 20%, 40%, 60%, 80% { transform: translateX(5px); } }
+    .animate-pulse { animation: pulse 2s infinite; }
+    .animate-spin { animation: spin 1s linear infinite; }
+    .animate-slideUp { animation: slideUp 0.4s ease-out; }
+    .animate-shake { animation: shake 0.5s ease-in-out; }
+    .glass { background: rgba(255,255,255,0.05); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.1); }
+    .glass-strong { background: rgba(255,255,255,0.1); backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.2); }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    .demo-badge { background: linear-gradient(135deg, #f59e0b, #d97706); }
+    .live-badge { background: linear-gradient(135deg, #22c55e, #16a34a); }
+    .danger-zone { background: linear-gradient(135deg, #dc2626, #991b1b); }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  
+  <script type="text/babel">
+    const { useState, useEffect, useMemo, useRef, useCallback } = React;
+
+    // ═══════════════════════════════════════════════════════════════
+    // 🔧 UTILITY FUNCTIONS
+    // ═══════════════════════════════════════════════════════════════
+    
+    const formatPrice = (p) => {
+      if (!p || isNaN(p)) return '-';
+      if (p >= 1000) return p.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      return p.toFixed(p >= 1 ? 4 : 6);
+    };
+    
+    const formatMoney = (n) => {
+      if (!n || isNaN(n)) return '$0.00';
+      if (n >= 1000000) return `$${(n/1000000).toFixed(2)}M`;
+      if (n >= 1000) return `$${(n/1000).toFixed(2)}K`;
+      return `$${n.toFixed(2)}`;
+    };
+
+    const formatTime = (date) => new Date(date).toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' });
+    
+    // دالة لتحويل النسبة إلى وصف مفهوم
+    const getScoreDescription = (percentage) => {
+      if (percentage >= 75) return { emoji: '🤩', text: 'ممتاز', advice: 'فرصة شراء قوية!', color: 'text-green-400', bg: 'bg-green-900/30' };
+      if (percentage >= 60) return { emoji: '😊', text: 'جيد', advice: 'يمكنك الشراء بحذر', color: 'text-green-400', bg: 'bg-green-900/20' };
+      if (percentage >= 45) return { emoji: '😐', text: 'متوسط', advice: 'انتظر فرصة أفضل', color: 'text-yellow-400', bg: 'bg-yellow-900/20' };
+      if (percentage >= 30) return { emoji: '😟', text: 'ضعيف', advice: 'لا تشتري الآن', color: 'text-red-400', bg: 'bg-red-900/20' };
+      return { emoji: '😰', text: 'ضعيف جداً', advice: 'ابتعد عن هذه العملة!', color: 'text-red-400', bg: 'bg-red-900/30' };
+    };
+
+    // ═══════════════════════════════════════════════════════════════
+    // 📊 TECHNICAL ANALYSIS FUNCTIONS
+    // ═══════════════════════════════════════════════════════════════
+    
+    const calculateEMA = (data, period) => {
+      const result = [];
+      const mult = 2 / (period + 1);
+      let ema = data.slice(0, period).reduce((a, b) => a + b.close, 0) / period;
+      for (let i = 0; i < data.length; i++) {
+        if (i < period - 1) result.push(null);
+        else if (i === period - 1) result.push(ema);
+        else { ema = (data[i].close - ema) * mult + ema; result.push(ema); }
+      }
+      return result;
+    };
+
+    const calculateRSI = (data, period = 14) => {
+      const result = [null];
+      const gains = [], losses = [];
+      for (let i = 1; i < data.length; i++) {
+        const change = data[i].close - data[i - 1].close;
+        gains.push(change > 0 ? change : 0);
+        losses.push(change < 0 ? Math.abs(change) : 0);
+      }
+      for (let i = 0; i < gains.length; i++) {
+        if (i < period - 1) result.push(null);
+        else {
+          const avgGain = gains.slice(Math.max(0, i - period + 1), i + 1).reduce((a, b) => a + b, 0) / period;
+          const avgLoss = losses.slice(Math.max(0, i - period + 1), i + 1).reduce((a, b) => a + b, 0) / period;
+          result.push(avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss)));
+        }
+      }
+      return result;
+    };
+
+    const calculateMACD = (data) => {
+      const ema12 = calculateEMA(data, 12);
+      const ema26 = calculateEMA(data, 26);
+      const macdLine = ema12.map((v, i) => v && ema26[i] ? v - ema26[i] : null);
+      const macdData = data.map((_, i) => ({ close: macdLine[i] || 0 }));
+      const signalLine = calculateEMA(macdData, 9);
+      return { macdLine, signalLine };
+    };
+
+    const calculateStochastic = (data, kPeriod = 14) => {
+      return data.map((_, i) => {
+        if (i < kPeriod - 1) return null;
+        const slice = data.slice(i - kPeriod + 1, i + 1);
+        const high = Math.max(...slice.map(d => d.high));
+        const low = Math.min(...slice.map(d => d.low));
+        return high === low ? 50 : ((data[i].close - low) / (high - low)) * 100;
+      });
+    };
+
+    const calculateBollingerBands = (data, period = 20) => {
+      const sma = data.map((_, i) => {
+        if (i < period - 1) return null;
+        return data.slice(i - period + 1, i + 1).reduce((a, b) => a + b.close, 0) / period;
+      });
+      return {
+        upper: sma.map((mean, i) => {
+          if (!mean) return null;
+          const slice = data.slice(i - period + 1, i + 1).map(d => d.close);
+          const std = Math.sqrt(slice.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / period);
+          return mean + 2 * std;
+        }),
+        lower: sma.map((mean, i) => {
+          if (!mean) return null;
+          const slice = data.slice(i - period + 1, i + 1).map(d => d.close);
+          const std = Math.sqrt(slice.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / period);
+          return mean - 2 * std;
+        })
+      };
+    };
+
+    const calculateATR = (data, period = 14) => {
+      const tr = data.map((d, i) => {
+        if (i === 0) return d.high - d.low;
+        return Math.max(d.high - d.low, Math.abs(d.high - data[i-1].close), Math.abs(d.low - data[i-1].close));
+      });
+      return tr.map((_, i) => i < period - 1 ? null : tr.slice(i - period + 1, i + 1).reduce((a, b) => a + b, 0) / period);
+    };
+
+    const calculateVWAP = (data) => {
+      let cumVol = 0, cumVolPrice = 0;
+      return data.map(d => {
+        cumVol += d.volume;
+        cumVolPrice += ((d.high + d.low + d.close) / 3) * d.volume;
+        return cumVol > 0 ? cumVolPrice / cumVol : null;
+      });
+    };
+
+    const calculateFibonacci = (high, low) => ({
+      0: low, 23.6: low + (high - low) * 0.236, 38.2: low + (high - low) * 0.382,
+      50: low + (high - low) * 0.5, 61.8: low + (high - low) * 0.618, 100: high
+    });
+
+    const detectCandlePatterns = (data) => {
+      if (data.length < 3) return [];
+      const patterns = [];
+      const c = data[data.length - 1], p1 = data[data.length - 2];
+      const body = Math.abs(c.close - c.open), range = c.high - c.low;
+      const upperWick = c.high - Math.max(c.open, c.close);
+      const lowerWick = Math.min(c.open, c.close) - c.low;
+      
+      if (body < range * 0.1) patterns.push({ name: 'دوجي', type: 'neutral', strength: 50 });
+      if (lowerWick > body * 2 && upperWick < body * 0.5 && c.close > c.open)
+        patterns.push({ name: 'المطرقة', type: 'bullish', strength: 70 });
+      if (upperWick > body * 2 && lowerWick < body * 0.5 && c.close < c.open)
+        patterns.push({ name: 'نجمة ساقطة', type: 'bearish', strength: 70 });
+      if (p1.close < p1.open && c.close > c.open && c.open < p1.close && c.close > p1.open)
+        patterns.push({ name: 'ابتلاع صعودي', type: 'bullish', strength: 85 });
+      if (p1.close > p1.open && c.close < c.open && c.open > p1.close && c.close < p1.open)
+        patterns.push({ name: 'ابتلاع هبوطي', type: 'bearish', strength: 85 });
+      
+      return patterns;
+    };
+
+    const detectRSIDivergence = (data, rsi) => {
+      const last = data.length - 1;
+      if (last < 15 || !rsi[last]) return { bullish: false, bearish: false };
+      for (let i = last - 10; i < last - 3; i++) {
+        if (!rsi[i]) continue;
+        if (data[last].low < data[i].low && rsi[last] > rsi[i] && rsi[last] < 40)
+          return { bullish: true, bearish: false };
+        if (data[last].high > data[i].high && rsi[last] < rsi[i] && rsi[last] > 60)
+          return { bullish: false, bearish: true };
+      }
+      return { bullish: false, bearish: false };
+    };
+
+    // ═══════════════════════════════════════════════════════════════
+    // 🪙 COINS & CONSTANTS
+    // ═══════════════════════════════════════════════════════════════
+    
+    const COINS = [
+      { symbol: 'BTCUSDT', name: 'بيتكوين', icon: '₿', color: '#f7931a' },
+      { symbol: 'ETHUSDT', name: 'إيثيريوم', icon: 'Ξ', color: '#627eea' },
+      { symbol: 'BNBUSDT', name: 'BNB', icon: '◈', color: '#f3ba2f' },
+      { symbol: 'SOLUSDT', name: 'سولانا', icon: '◎', color: '#00ffa3' },
+      { symbol: 'XRPUSDT', name: 'ريبل', icon: '✕', color: '#00aae4' },
+    ];
+
+    const INITIAL_DEMO_BALANCE = 10000;
+
+    // ═══════════════════════════════════════════════════════════════
+    // 🔔 SOUND & VIBRATION
+    // ═══════════════════════════════════════════════════════════════
+    
+    const playSound = (type = 'alert') => {
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.frequency.value = type === 'success' ? 800 : type === 'error' ? 300 : 600;
+        osc.type = 'sine';
+        gain.gain.setValueAtTime(0.2, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
+        osc.start(ctx.currentTime);
+        osc.stop(ctx.currentTime + 0.3);
+      } catch (e) {}
+    };
+
+    const vibrate = (pattern = [100]) => {
+      if (navigator.vibrate) navigator.vibrate(pattern);
+    };
+
+    // ═══════════════════════════════════════════════════════════════
+    // 💾 LOCAL STORAGE
+    // ═══════════════════════════════════════════════════════════════
+    
+    const useLocalStorage = (key, initialValue) => {
+      const [value, setValue] = useState(() => {
+        try {
+          const item = localStorage.getItem(key);
+          return item ? JSON.parse(item) : initialValue;
+        } catch { return initialValue; }
+      });
+      
+      useEffect(() => {
+        try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+      }, [key, value]);
+      
+      return [value, setValue];
+    };
+
+    // ═══════════════════════════════════════════════════════════════
+    // 🎯 AQ SCORE CALCULATOR - نسخة مبسطة بالعربي
+    // ═══════════════════════════════════════════════════════════════
+    
+    const calculateAQScore = (data, price, derivData) => {
+      if (!data || data.length < 30) return null;
+      
+      const last = data.length - 1;
+      const high = Math.max(...data.map(d => d.high));
+      const low = Math.min(...data.map(d => d.low));
+      
+      const ema20 = calculateEMA(data, 20);
+      const ema50 = calculateEMA(data, 50);
+      const rsi = calculateRSI(data);
+      const macd = calculateMACD(data);
+      const stoch = calculateStochastic(data);
+      const bb = calculateBollingerBands(data);
+      const atr = calculateATR(data);
+      const vwap = calculateVWAP(data);
+      const fib = calculateFibonacci(high, low);
+      const patterns = detectCandlePatterns(data);
+      const divergence = detectRSIDivergence(data, rsi);
+
+      const tests = [];
+      let totalScore = 0;
+
+      // اختبار 1: اتجاه السعر
+      const emaTest = price > ema20[last] && ema20[last] > ema50[last];
+      tests.push({ 
+        id: 1, 
+        name: '📈 اتجاه السعر', 
+        nameSimple: 'هل السعر يرتفع؟',
+        passed: emaTest, 
+        status: emaTest ? 'السعر فوق المتوسط ✅' : 'السعر تحت المتوسط ❌',
+        explanation: emaTest ? 'السعر في اتجاه صعودي جيد' : 'السعر في اتجاه هبوطي - انتظر',
+        score: emaTest ? 8 : 0, 
+        maxScore: 8 
+      });
+      totalScore += emaTest ? 8 : 0;
+
+      // اختبار 2: قوة السوق
+      const rsiVal = rsi[last];
+      const rsiTest = rsiVal < 30;
+      let rsiStatus, rsiExplanation;
+      if (rsiVal < 30) { rsiStatus = 'مشبع بيع (فرصة شراء) ✅'; rsiExplanation = 'السوق منخفض جداً - وقت ممتاز للشراء!'; }
+      else if (rsiVal < 45) { rsiStatus = 'قريب من فرصة ⚠️'; rsiExplanation = 'السوق بدأ ينخفض - راقب'; }
+      else if (rsiVal < 55) { rsiStatus = 'محايد ➡️'; rsiExplanation = 'السوق متوازن - لا فرصة واضحة'; }
+      else if (rsiVal < 70) { rsiStatus = 'مرتفع قليلاً ⚠️'; rsiExplanation = 'السوق مرتفع - الشراء فيه مخاطرة'; }
+      else { rsiStatus = 'مشبع شراء (خطر) ❌'; rsiExplanation = 'السوق مرتفع جداً - لا تشتري!'; }
+      
+      tests.push({ 
+        id: 2, 
+        name: '💪 قوة السوق', 
+        nameSimple: 'هل السوق مناسب للشراء؟',
+        passed: rsiTest, 
+        status: rsiStatus,
+        value: rsiVal?.toFixed(0),
+        explanation: rsiExplanation,
+        score: rsiVal < 30 ? 10 : rsiVal < 40 ? 5 : 3, 
+        maxScore: 10 
+      });
+      totalScore += rsiVal < 30 ? 10 : rsiVal < 40 ? 5 : 3;
+
+      // اختبار 3: إشارة انعكاس
+      tests.push({ 
+        id: 3, 
+        name: '🔄 إشارة انعكاس', 
+        nameSimple: 'هل يوجد علامة على تغير الاتجاه؟',
+        passed: divergence.bullish, 
+        status: divergence.bullish ? 'توجد إشارة انعكاس صعودي! ✅' : 'لا توجد إشارة ❌',
+        explanation: divergence.bullish ? 'إشارة قوية أن السعر سيرتفع!' : 'لم تظهر إشارة انعكاس بعد',
+        score: divergence.bullish ? 12 : 0, 
+        maxScore: 12 
+      });
+      totalScore += divergence.bullish ? 12 : 0;
+
+      // اختبار 4: زخم السوق
+      const macdVal = macd.macdLine[last], macdSig = macd.signalLine[last];
+      const macdTest = macdVal > macdSig;
+      tests.push({ 
+        id: 4, 
+        name: '🚀 زخم السوق', 
+        nameSimple: 'هل قوة الشراء أعلى من البيع؟',
+        passed: macdTest, 
+        status: macdTest ? 'الزخم صعودي ✅' : 'الزخم هبوطي ❌',
+        explanation: macdTest ? 'قوة الشراء أعلى - إشارة إيجابية' : 'قوة البيع أعلى - انتظر',
+        score: macdTest ? 8 : 0, 
+        maxScore: 8 
+      });
+      totalScore += macdTest ? 8 : 0;
+
+      // اختبار 5: سرعة التغير
+      const stochVal = stoch[last];
+      const stochTest = stochVal < 20;
+      let stochStatus;
+      if (stochVal < 20) stochStatus = 'فرصة شراء قوية ✅';
+      else if (stochVal < 40) stochStatus = 'فرصة متوسطة ⚠️';
+      else if (stochVal > 80) stochStatus = 'تشبع - لا تشتري ❌';
+      else stochStatus = 'طبيعي ➡️';
+      
+      tests.push({ 
+        id: 5, 
+        name: '⚡ سرعة التغير', 
+        nameSimple: 'هل السعر تحرك بسرعة؟',
+        passed: stochTest, 
+        status: stochStatus,
+        value: stochVal?.toFixed(0),
+        explanation: stochTest ? 'السعر انخفض بسرعة - فرصة للشراء' : 'السعر مستقر أو مرتفع',
+        score: stochVal < 20 ? 6 : stochVal < 40 ? 3 : 0, 
+        maxScore: 6 
+      });
+      totalScore += stochVal < 20 ? 6 : stochVal < 40 ? 3 : 0;
+
+      // اختبار 6: نطاق السعر
+      const bbTest = price < bb.lower[last];
+      tests.push({ 
+        id: 6, 
+        name: '📊 نطاق السعر', 
+        nameSimple: 'هل السعر في منطقة رخيصة؟',
+        passed: bbTest, 
+        status: bbTest ? 'السعر رخيص جداً ✅' : 'السعر في النطاق الطبيعي ➡️',
+        explanation: bbTest ? 'السعر أقل من المعتاد - فرصة شراء!' : 'السعر ضمن المعدل الطبيعي',
+        score: bbTest ? 8 : 4, 
+        maxScore: 8 
+      });
+      totalScore += bbTest ? 8 : 4;
+
+      // اختبار 7: السعر العادل
+      const vwapTest = price > vwap[last];
+      tests.push({ 
+        id: 7, 
+        name: '⚖️ السعر العادل', 
+        nameSimple: 'هل السعر فوق المتوسط العادل؟',
+        passed: vwapTest, 
+        status: vwapTest ? 'السعر فوق العادل ✅' : 'السعر تحت العادل ❌',
+        value: formatPrice(vwap[last]),
+        explanation: vwapTest ? 'السعر أعلى من المتوسط العادل - إيجابي' : 'السعر أقل من العادل',
+        score: vwapTest ? 6 : 0, 
+        maxScore: 6 
+      });
+      totalScore += vwapTest ? 6 : 0;
+
+      // اختبار 8: مستويات الدعم
+      const nearFib = Object.entries(fib).find(([k, v]) => Math.abs(price - v) / price < 0.02);
+      const fibTest = nearFib && ['38.2', '50', '61.8'].includes(nearFib[0]);
+      tests.push({ 
+        id: 8, 
+        name: '🎯 مستوى دعم', 
+        nameSimple: 'هل السعر قرب منطقة دعم مهمة؟',
+        passed: fibTest, 
+        status: fibTest ? `قرب دعم ${nearFib[0]}% ✅` : nearFib ? `قرب مستوى ${nearFib[0]}%` : 'بعيد عن الدعم ❌',
+        explanation: fibTest ? 'السعر قرب منطقة دعم قوية - فرصة جيدة' : 'السعر بعيد عن مناطق الدعم',
+        score: fibTest ? 8 : nearFib ? 4 : 0, 
+        maxScore: 8 
+      });
+      totalScore += fibTest ? 8 : nearFib ? 4 : 0;
+
+      // اختبار 9: أنماط الشموع
+      const bullishPattern = patterns.find(p => p.type === 'bullish');
+      tests.push({ 
+        id: 9, 
+        name: '🕯️ شكل الشموع', 
+        nameSimple: 'هل ظهر نمط شراء في الشموع؟',
+        passed: !!bullishPattern, 
+        status: bullishPattern ? `ظهر نمط "${bullishPattern.name}" ✅` : 'لا يوجد نمط صعودي ❌',
+        explanation: bullishPattern ? 'ظهرت إشارة شراء في الشموع!' : 'لم تظهر أنماط شراء',
+        score: bullishPattern ? 8 : 0, 
+        maxScore: 8 
+      });
+      totalScore += bullishPattern ? 8 : 0;
+
+      // اختبار 10: رسوم التمويل
+      const fundingTest = derivData && derivData.fundingRate < 0;
+      let fundingExplanation = '';
+      if (derivData) {
+        if (derivData.fundingRate < 0) fundingExplanation = 'البائعون يدفعون للمشترين - إشارة شراء!';
+        else fundingExplanation = 'المشترون يدفعون للبائعين - حذر';
+      }
+      tests.push({ 
+        id: 10, 
+        name: '💰 رسوم التمويل', 
+        nameSimple: 'من يدفع لمن؟',
+        passed: fundingTest, 
+        status: fundingTest ? 'البائعون يدفعون ✅' : 'المشترون يدفعون ❌',
+        value: derivData ? `${derivData.fundingRate.toFixed(4)}%` : '—',
+        explanation: fundingExplanation || 'غير متوفر',
+        score: fundingTest ? 8 : 4, 
+        maxScore: 8 
+      });
+      totalScore += fundingTest ? 8 : 4;
+
+      // اختبار 11: توقعات المتداولين
+      const lsTest = derivData && derivData.longShortRatio < 1;
+      let lsExplanation = '';
+      if (derivData) {
+        const longPct = (derivData.longAccount || 50).toFixed(0);
+        const shortPct = (derivData.shortAccount || 50).toFixed(0);
+        if (lsTest) lsExplanation = `${shortPct}% يتوقعون الهبوط - فرصة للشراء ضدهم!`;
+        else lsExplanation = `${longPct}% يتوقعون الصعود - السوق متفائل`;
+      }
+      tests.push({ 
+        id: 11, 
+        name: '👥 توقعات المتداولين', 
+        nameSimple: 'ماذا يتوقع أغلب المتداولين؟',
+        passed: lsTest, 
+        status: lsTest ? 'الأغلبية تتوقع هبوط ✅' : 'الأغلبية تتوقع صعود ➡️',
+        explanation: lsExplanation || 'غير متوفر',
+        score: lsTest ? 8 : 4, 
+        maxScore: 8 
+      });
+      totalScore += lsTest ? 8 : 4;
+
+      // اختبار 12: استقرار السعر
+      const atrVal = atr[last];
+      const atrPct = (atrVal / price) * 100;
+      const atrTest = atrPct < 5;
+      tests.push({ 
+        id: 12, 
+        name: '📉 استقرار السعر', 
+        nameSimple: 'هل السعر مستقر أم متقلب؟',
+        passed: atrTest, 
+        status: atrTest ? 'السعر مستقر ✅' : 'السعر متقلب ⚠️',
+        value: `${atrPct.toFixed(1)}%`,
+        explanation: atrTest ? 'تقلب منخفض - آمن للدخول' : 'تقلب عالي - كن حذراً',
+        score: atrTest ? 6 : 3, 
+        maxScore: 6 
+      });
+      totalScore += atrTest ? 6 : 3;
+
+      const maxScore = 100;
+      const percentage = (totalScore / maxScore) * 100;
+      const passedTests = tests.filter(t => t.passed).length;
+
+      let recommendation, confidence, color;
+      if (percentage >= 75) { recommendation = '🟢 شراء قوي'; confidence = 'عالية جداً'; color = 'from-green-600 to-emerald-700'; }
+      else if (percentage >= 60) { recommendation = '🟢 شراء'; confidence = 'عالية'; color = 'from-green-700 to-green-800'; }
+      else if (percentage >= 45) { recommendation = '🟡 انتظار'; confidence = 'متوسطة'; color = 'from-yellow-600 to-amber-700'; }
+      else if (percentage >= 30) { recommendation = '🔴 لا تشتري'; confidence = 'عالية'; color = 'from-red-700 to-red-800'; }
+      else { recommendation = '🔴 ابتعد!'; confidence = 'عالية جداً'; color = 'from-red-600 to-rose-700'; }
+
+      return { 
+        tests, 
+        totalScore, 
+        maxScore, 
+        percentage, 
+        passedTests, 
+        recommendation, 
+        confidence, 
+        color, 
+        indicators: { 
+          ema20: ema20[last], 
+          ema50: ema50[last], 
+          rsi: rsiVal, 
+          atr: atrVal, 
+          atrPct,
+          vwap: vwap[last], 
+          fib 
+        }, 
+        patterns, 
+        divergence,
+        derivData
+      };
+    };
+
+    // ═══════════════════════════════════════════════════════════════
+    // 🔌 DATA HOOKS
+    // ═══════════════════════════════════════════════════════════════
+    
+    function useMarketData(symbol) {
+      const [data, setData] = useState([]);
+      const [price, setPrice] = useState(null);
+      const [loading, setLoading] = useState(true);
+      const wsRef = useRef(null);
+
+      useEffect(() => {
+        const fetchKlines = async () => {
+          try {
+            const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=4h&limit=100`);
+            const json = await res.json();
+            setData(json.map(c => ({ time: c[0], open: parseFloat(c[1]), high: parseFloat(c[2]), low: parseFloat(c[3]), close: parseFloat(c[4]), volume: parseFloat(c[5]) })));
+            setPrice(parseFloat(json[json.length - 1][4]));
+            setLoading(false);
+          } catch (e) { setLoading(false); }
+        };
+        fetchKlines();
+        const interval = setInterval(fetchKlines, 60000);
+        const ws = new WebSocket(`wss://stream.binance.com:9443/ws/${symbol.toLowerCase()}@trade`);
+        wsRef.current = ws;
+        ws.onmessage = (e) => setPrice(parseFloat(JSON.parse(e.data).p));
+        return () => { clearInterval(interval); ws.close(); };
+      }, [symbol]);
+
+      return { data, price, loading };
+    }
+
+    function useDerivativesData(symbol) {
+      const [data, setData] = useState(null);
+      useEffect(() => {
+        const fetchData = async () => {
+          try {
+            const [fundingRes, lsRes] = await Promise.all([
+              fetch(`https://fapi.binance.com/fapi/v1/fundingRate?symbol=${symbol}&limit=1`),
+              fetch(`https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=${symbol}&period=1h&limit=1`)
+            ]);
+            const [funding, ls] = await Promise.all([fundingRes.json(), lsRes.json()]);
+            setData({
+              fundingRate: parseFloat(funding[0]?.fundingRate || 0) * 100,
+              longShortRatio: parseFloat(ls[0]?.longShortRatio || 1),
+              longAccount: parseFloat(ls[0]?.longAccount || 0.5) * 100,
+              shortAccount: parseFloat(ls[0]?.shortAccount || 0.5) * 100,
+            });
+          } catch {
+            setData({ fundingRate: (Math.random() - 0.5) * 0.04, longShortRatio: 0.8 + Math.random() * 0.6, longAccount: 45 + Math.random() * 15, shortAccount: 40 + Math.random() * 15 });
+          }
+        };
+        fetchData();
+        const interval = setInterval(fetchData, 30000);
+        return () => clearInterval(interval);
+      }, [symbol]);
+      return data;
+    }
+
+    function useAllPrices() {
+      const [prices, setPrices] = useState({});
+      useEffect(() => {
+        const fetch24h = async () => {
+          try {
+            const res = await fetch('https://api.binance.com/api/v3/ticker/24hr');
+            const data = await res.json();
+            const priceMap = {};
+            data.forEach(t => { priceMap[t.symbol] = { price: parseFloat(t.lastPrice), change: parseFloat(t.priceChangePercent) }; });
+            setPrices(priceMap);
+          } catch {}
+        };
+        fetch24h();
+        const interval = setInterval(fetch24h, 10000);
+        return () => clearInterval(interval);
+      }, []);
+      return prices;
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // 🎨 COMPONENTS
+    // ═══════════════════════════════════════════════════════════════
+    
+    function Toast({ message, type = 'success', onClose }) {
+      useEffect(() => { const t = setTimeout(onClose, 3000); return () => clearTimeout(t); }, [onClose]);
+      return (
+        <div className={`fixed top-20 left-4 right-4 p-4 rounded-xl z-50 animate-slideUp ${type === 'success' ? 'bg-green-600' : type === 'error' ? 'bg-red-600' : 'bg-yellow-600'}`}>
+          <p className="text-center font-bold">{message}</p>
+        </div>
+      );
+    }
+
+    function CoinSelector({ coins, selected, onChange }) {
+      return (
+        <div className="flex gap-2 overflow-x-auto pb-2 no-scrollbar -mx-4 px-4">
+          {coins.map(c => (
+            <button key={c.symbol} onClick={() => onChange(c)}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl whitespace-nowrap transition-all ${selected.symbol === c.symbol ? 'bg-indigo-600 shadow-lg' : 'glass'}`}>
+              <span className="text-lg">{c.icon}</span>
+              <span className="text-sm">{c.name}</span>
+            </button>
+          ))}
+        </div>
+      );
+    }
+
+    // دائرة النتيجة مع شرح
+    function ScoreRing({ score, max, size = 'md', showLabel = true }) {
+      const pct = (score / max) * 100;
+      const desc = getScoreDescription(pct);
+      const dims = size === 'lg' ? 'w-24 h-24' : 'w-16 h-16';
+      const textSize = size === 'lg' ? 'text-xl' : 'text-sm';
+      const color = pct >= 60 ? '#22c55e' : pct >= 45 ? '#eab308' : '#ef4444';
+      
+      return (
+        <div className="flex flex-col items-center">
+          <div className={`relative ${dims}`}>
+            <svg viewBox="0 0 36 36" className="w-full h-full -rotate-90">
+              <circle cx="18" cy="18" r="15" fill="none" stroke="#374151" strokeWidth="3" />
+              <circle cx="18" cy="18" r="15" fill="none" stroke={color} strokeWidth="3" strokeDasharray={`${pct} 100`} strokeLinecap="round" />
+            </svg>
+            <div className="absolute inset-0 flex flex-col items-center justify-center">
+              <span className="text-lg">{desc.emoji}</span>
+              <span className={`${textSize} font-bold`}>{pct.toFixed(0)}%</span>
+            </div>
+          </div>
+          {showLabel && (
+            <p className={`text-xs mt-1 ${desc.color}`}>{desc.text}</p>
+          )}
+        </div>
+      );
+    }
+
+    // بطاقة المؤشرات المبسطة
+    function SimpleIndicatorsCard({ aqScore, price }) {
+      if (!aqScore) return null;
+      
+      const { indicators, derivData } = aqScore;
+      
+      const items = [
+        {
+          icon: '📈',
+          name: 'متوسط السعر',
+          value: `$${formatPrice(indicators.ema20)}`,
+          status: price > indicators.ema20,
+          statusText: price > indicators.ema20 ? 'السعر فوقه ✅' : 'السعر تحته ❌'
+        },
+        {
+          icon: '💪',
+          name: 'قوة السوق',
+          value: indicators.rsi?.toFixed(0) || '—',
+          status: indicators.rsi < 50,
+          statusText: indicators.rsi < 30 ? 'فرصة شراء! ✅' : indicators.rsi < 50 ? 'محايد ➡️' : indicators.rsi < 70 ? 'مرتفع ⚠️' : 'خطر! ❌'
+        },
+        {
+          icon: '⚖️',
+          name: 'السعر العادل',
+          value: `$${formatPrice(indicators.vwap)}`,
+          status: price > indicators.vwap,
+          statusText: price > indicators.vwap ? 'السعر فوقه ✅' : 'السعر تحته ❌'
+        },
+        {
+          icon: '📉',
+          name: 'نسبة التقلب',
+          value: `${indicators.atrPct?.toFixed(1) || '—'}%`,
+          status: indicators.atrPct < 5,
+          statusText: indicators.atrPct < 3 ? 'مستقر جداً ✅' : indicators.atrPct < 5 ? 'مستقر ✅' : 'متقلب ⚠️'
+        }
+      ];
+
+      return (
+        <div className="grid grid-cols-2 gap-2">
+          {items.map((item, i) => (
+            <div key={i} className="glass rounded-xl p-3">
+              <div className="flex items-center gap-2 mb-1">
+                <span>{item.icon}</span>
+                <span className="text-xs text-gray-400">{item.name}</span>
+              </div>
+              <p className="font-bold text-indigo-400">{item.value}</p>
+              <p className={`text-xs ${item.status ? 'text-green-400' : 'text-red-400'}`}>{item.statusText}</p>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    // بطاقة المشتقات المبسطة
+    function SimpleDerivativesCard({ derivData }) {
+      if (!derivData) return null;
+      
+      const fundingPositive = derivData.fundingRate < 0;
+      const shortDominant = derivData.shortAccount > derivData.longAccount;
+      
+      return (
+        <div className="space-y-3">
+          {/* رسوم التمويل */}
+          <div className="glass rounded-xl p-4">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <span className="text-xl">💰</span>
+                <span className="font-bold">رسوم التمويل</span>
+              </div>
+              <span className={`font-bold ${fundingPositive ? 'text-green-400' : 'text-red-400'}`}>
+                {derivData.fundingRate.toFixed(4)}%
+              </span>
+            </div>
+            <p className={`text-sm ${fundingPositive ? 'text-green-300' : 'text-red-300'}`}>
+              {fundingPositive 
+                ? '✅ البائعون يدفعون للمشترين = إشارة شراء!'
+                : '❌ المشترون يدفعون للبائعين = حذر'}
+            </p>
+          </div>
+          
+          {/* توقعات المتداولين */}
+          <div className="glass rounded-xl p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-xl">👥</span>
+              <span className="font-bold">توقعات المتداولين</span>
+            </div>
+            
+            <div className="flex h-8 rounded-full overflow-hidden mb-2">
+              <div className="bg-green-600 flex items-center justify-center text-xs font-bold" style={{ width: `${derivData.longAccount}%` }}>
+                {derivData.longAccount.toFixed(0)}%
+              </div>
+              <div className="bg-red-600 flex items-center justify-center text-xs font-bold" style={{ width: `${derivData.shortAccount}%` }}>
+                {derivData.shortAccount.toFixed(0)}%
+              </div>
+            </div>
+            
+            <div className="flex justify-between text-xs">
+              <span className="text-green-400">🟢 يتوقعون صعود</span>
+              <span className="text-red-400">🔴 يتوقعون هبوط</span>
+            </div>
+            
+            <p className={`text-sm mt-2 p-2 rounded-lg ${shortDominant ? 'bg-green-900/30 text-green-300' : 'bg-yellow-900/30 text-yellow-300'}`}>
+              {shortDominant 
+                ? '✅ الأغلبية تتوقع هبوط = فرصة للشراء ضدهم!'
+                : '⚠️ الأغلبية تتوقع صعود = كن حذراً'}
+            </p>
+          </div>
+        </div>
+      );
+    }
+
+    // قائمة الاختبارات المبسطة
+    function SimpleTestsList({ tests }) {
+      return (
+        <div className="space-y-2">
+          {tests.map(t => (
+            <div key={t.id} className={`rounded-xl p-3 ${t.passed ? 'bg-green-900/20 border border-green-500/30' : 'bg-red-900/20 border border-red-500/30'}`}>
+              <div className="flex justify-between items-start mb-1">
+                <span className="font-bold text-sm">{t.name}</span>
+                <span className={`text-xs px-2 py-0.5 rounded-full ${t.passed ? 'bg-green-600' : 'bg-red-600'}`}>
+                  {t.score}/{t.maxScore}
+                </span>
+              </div>
+              <p className="text-xs text-gray-400 mb-1">{t.nameSimple}</p>
+              <p className={`text-sm ${t.passed ? 'text-green-400' : 'text-red-400'}`}>{t.status}</p>
+              <p className="text-xs text-gray-500 mt-1">{t.explanation}</p>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // 🎓 DEMO TRADING PAGE
+    // ═══════════════════════════════════════════════════════════════
+    
+    function DemoTradingPage({ onBack }) {
+      const [coin, setCoin] = useState(COINS[0]);
+      const [balance, setBalance] = useLocalStorage('demo_balance', INITIAL_DEMO_BALANCE);
+      const [portfolio, setPortfolio] = useLocalStorage('demo_portfolio', {});
+      const [trades, setTrades] = useLocalStorage('demo_trades', []);
+      const [orderType, setOrderType] = useState('buy');
+      const [amount, setAmount] = useState('');
+      const [toast, setToast] = useState(null);
+      const [tab, setTab] = useState('trade');
+
+      const { data, price, loading } = useMarketData(coin.symbol);
+      const derivData = useDerivativesData(coin.symbol);
+      const aqScore = useMemo(() => calculateAQScore(data, price, derivData), [data, price, derivData]);
+      const allPrices = useAllPrices();
+
+      const portfolioValue = useMemo(() => {
+        let total = balance;
+        Object.entries(portfolio).forEach(([symbol, qty]) => {
+          const p = allPrices[symbol]?.price || 0;
+          total += qty * p;
+        });
+        return total;
+      }, [balance, portfolio, allPrices]);
+
+      const totalPnL = portfolioValue - INITIAL_DEMO_BALANCE;
+      const scoreDesc = aqScore ? getScoreDescription(aqScore.percentage) : null;
+
+      const executeTrade = () => {
+        const qty = parseFloat(amount);
+        if (!qty || qty <= 0 || !price) return;
+        const totalCost = qty * price;
+        const coinKey = coin.symbol;
+
+        if (orderType === 'buy') {
+          if (totalCost > balance) {
+            playSound('error'); vibrate([100, 50, 100]);
+            setToast({ message: '❌ رصيد غير كافي!', type: 'error' });
+            return;
+          }
+          setBalance(prev => prev - totalCost);
+          setPortfolio(prev => ({ ...prev, [coinKey]: (prev[coinKey] || 0) + qty }));
+          setTrades(prev => [...prev, { id: Date.now(), coin: coinKey, coinName: coin.name, type: 'buy', price, qty, total: totalCost, time: Date.now() }]);
+          playSound('success'); vibrate([100]);
+          setToast({ message: `✅ تم شراء ${qty.toFixed(6)} ${coin.name}`, type: 'success' });
+        } else {
+          const holdings = portfolio[coinKey] || 0;
+          if (qty > holdings) {
+            playSound('error'); vibrate([100, 50, 100]);
+            setToast({ message: '❌ كمية غير كافية!', type: 'error' });
+            return;
+          }
+          const buys = trades.filter(t => t.coin === coinKey && t.type === 'buy');
+          const avgPrice = buys.reduce((s, t) => s + t.price * t.qty, 0) / buys.reduce((s, t) => s + t.qty, 0) || price;
+          const pnl = (price - avgPrice) * qty;
+          setBalance(prev => prev + totalCost);
+          setPortfolio(prev => {
+            const newQty = (prev[coinKey] || 0) - qty;
+            if (newQty <= 0) { const { [coinKey]: _, ...rest } = prev; return rest; }
+            return { ...prev, [coinKey]: newQty };
+          });
+          setTrades(prev => [...prev, { id: Date.now(), coin: coinKey, coinName: coin.name, type: 'sell', price, qty, total: totalCost, pnl, time: Date.now() }]);
+          playSound(pnl >= 0 ? 'success' : 'error');
+          vibrate(pnl >= 0 ? [100, 50, 100] : [200]);
+          setToast({ message: `${pnl >= 0 ? '🎉' : '😔'} بيع ${coin.name} | الربح: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}`, type: pnl >= 0 ? 'success' : 'error' });
+        }
+        setAmount('');
+      };
+
+      const resetDemo = () => {
+        if (confirm('إعادة تعيين كل البيانات؟')) {
+          setBalance(INITIAL_DEMO_BALANCE);
+          setPortfolio({});
+          setTrades([]);
+          setToast({ message: '🔄 تم إعادة التعيين!', type: 'success' });
+        }
+      };
+
+      const setPercentage = (pct) => {
+        if (orderType === 'buy') setAmount(((balance * pct) / price).toFixed(6));
+        else setAmount(((portfolio[coin.symbol] || 0) * pct).toFixed(6));
+      };
+
+      return (
+        <div className="min-h-screen bg-[#0a0a0f] text-white pb-6">
+          {toast && <Toast {...toast} onClose={() => setToast(null)} />}
+          
+          <div className="demo-badge p-4 sticky top-0 z-30">
+            <div className="flex justify-between items-center">
+              <button onClick={onBack} className="text-2xl">←</button>
+              <div className="text-center">
+                <h1 className="text-lg font-bold">🎓 التدريب</h1>
+                <p className="text-xs opacity-80">تدرب بأموال وهمية - $10,000</p>
+              </div>
+              <button onClick={resetDemo} className="text-sm bg-white/20 px-3 py-1 rounded-lg">🔄</button>
+            </div>
+          </div>
+
+          <div className="p-4 space-y-4">
+            {/* ملخص المحفظة */}
+            <div className="glass rounded-2xl p-4">
+              <div className="grid grid-cols-3 gap-3 text-center">
+                <div>
+                  <p className="text-xs text-gray-400">💵 الرصيد النقدي</p>
+                  <p className="font-bold">{formatMoney(balance)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-400">💼 إجمالي المحفظة</p>
+                  <p className="font-bold text-indigo-400">{formatMoney(portfolioValue)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-400">📊 الربح/الخسارة</p>
+                  <p className={`font-bold ${totalPnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                    {totalPnL >= 0 ? '+' : ''}{formatMoney(totalPnL)}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* التبويبات */}
+            <div className="flex gap-2">
+              {[{ id: 'trade', l: '📈 تداول' }, { id: 'portfolio', l: '💼 المحفظة' }, { id: 'history', l: '📜 السجل' }, { id: 'analysis', l: '🎯 التحليل' }].map(t => (
+                <button key={t.id} onClick={() => setTab(t.id)} className={`flex-1 py-2 rounded-xl text-xs ${tab === t.id ? 'bg-amber-600' : 'glass'}`}>{t.l}</button>
+              ))}
+            </div>
+
+            {/* تبويب التداول */}
+            {tab === 'trade' && (
+              <div className="space-y-4 animate-slideUp">
+                <CoinSelector coins={COINS} selected={coin} onChange={setCoin} />
+                
+                <div className="glass rounded-xl p-4">
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-2xl">{coin.icon}</span>
+                        <span className="font-bold">{coin.name}</span>
+                      </div>
+                      <p className="text-xl font-bold mt-1">${formatPrice(price)}</p>
+                    </div>
+                    {aqScore && <ScoreRing score={aqScore.percentage} max={100} size="lg" />}
+                  </div>
+                  
+                  {/* التوصية المبسطة */}
+                  {scoreDesc && (
+                    <div className={`mt-3 p-3 rounded-xl ${scoreDesc.bg}`}>
+                      <p className={`text-center font-bold ${scoreDesc.color}`}>
+                        {scoreDesc.emoji} {scoreDesc.text}
+                      </p>
+                      <p className="text-center text-sm text-gray-300 mt-1">{scoreDesc.advice}</p>
+                      <p className="text-center text-xs text-gray-400 mt-1">
+                        نجح {aqScore.passedTests} اختبار من 12
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {portfolio[coin.symbol] > 0 && (
+                  <div className="glass rounded-xl p-3 text-center">
+                    <p className="text-xs text-gray-400">💰 رصيدك من {coin.name}</p>
+                    <p className="font-bold">{portfolio[coin.symbol].toFixed(6)}</p>
+                  </div>
+                )}
+
+                <div className="glass rounded-2xl p-4 space-y-4">
+                  <div className="flex gap-2">
+                    <button onClick={() => setOrderType('buy')} className={`flex-1 py-3 rounded-xl font-bold ${orderType === 'buy' ? 'bg-green-600' : 'bg-gray-800'}`}>🟢 شراء</button>
+                    <button onClick={() => setOrderType('sell')} className={`flex-1 py-3 rounded-xl font-bold ${orderType === 'sell' ? 'bg-red-600' : 'bg-gray-800'}`}>🔴 بيع</button>
+                  </div>
+                  <div>
+                    <label className="text-sm text-gray-400">الكمية</label>
+                    <input type="number" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.00" className="w-full mt-1 p-3 rounded-xl bg-gray-800 border border-gray-700 text-lg" />
+                  </div>
+                  <div className="flex gap-2">
+                    {[0.25, 0.5, 0.75, 1].map(pct => (
+                      <button key={pct} onClick={() => setPercentage(pct)} className="flex-1 py-2 rounded-lg bg-gray-800 text-sm">{pct * 100}%</button>
+                    ))}
+                  </div>
+                  {amount && price && (
+                    <div className="bg-gray-800 rounded-xl p-3 text-center">
+                      <p className="text-sm text-gray-400">💵 الإجمالي</p>
+                      <p className="text-xl font-bold">${formatPrice(parseFloat(amount) * price)}</p>
+                    </div>
+                  )}
+                  <button onClick={executeTrade} className={`w-full py-4 rounded-xl font-bold text-lg ${orderType === 'buy' ? 'bg-green-600' : 'bg-red-600'}`}>
+                    {orderType === 'buy' ? '🟢 شراء' : '🔴 بيع'} {coin.name}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* تبويب المحفظة */}
+            {tab === 'portfolio' && (
+              <div className="space-y-3 animate-slideUp">
+                {Object.keys(portfolio).length === 0 ? (
+                  <div className="glass rounded-xl p-8 text-center text-gray-400">
+                    <p className="text-4xl mb-2">💼</p>
+                    <p>المحفظة فارغة</p>
+                    <p className="text-sm mt-2">اشترِ عملات من تبويب التداول</p>
+                  </div>
+                ) : (
+                  Object.entries(portfolio).map(([symbol, qty]) => {
+                    const coinInfo = COINS.find(c => c.symbol === symbol);
+                    const currentPrice = allPrices[symbol]?.price || 0;
+                    const value = qty * currentPrice;
+                    return (
+                      <div key={symbol} className="glass rounded-xl p-4">
+                        <div className="flex justify-between items-center">
+                          <div className="flex items-center gap-3">
+                            <span className="text-2xl">{coinInfo?.icon}</span>
+                            <div>
+                              <p className="font-bold">{coinInfo?.name}</p>
+                              <p className="text-sm text-gray-400">{qty.toFixed(6)} عملة</p>
+                            </div>
+                          </div>
+                          <p className="font-bold">{formatMoney(value)}</p>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            )}
+
+            {/* تبويب السجل */}
+            {tab === 'history' && (
+              <div className="space-y-2 animate-slideUp max-h-96 overflow-y-auto no-scrollbar">
+                {trades.length === 0 ? (
+                  <div className="glass rounded-xl p-8 text-center text-gray-400">
+                    <p className="text-4xl mb-2">📜</p>
+                    <p>لا توجد صفقات</p>
+                  </div>
+                ) : (
+                  trades.slice().reverse().map(t => (
+                    <div key={t.id} className={`glass rounded-xl p-3 border-r-4 ${t.type === 'buy' ? 'border-green-500' : t.pnl >= 0 ? 'border-blue-500' : 'border-red-500'}`}>
+                      <div className="flex justify-between items-center">
+                        <div className="flex items-center gap-2">
+                          <span>{COINS.find(c => c.symbol === t.coin)?.icon}</span>
+                          <span className={`text-xs px-2 py-0.5 rounded ${t.type === 'buy' ? 'bg-green-900 text-green-400' : 'bg-red-900 text-red-400'}`}>
+                            {t.type === 'buy' ? 'شراء' : 'بيع'}
+                          </span>
+                        </div>
+                        <span className="text-xs text-gray-400">{formatTime(t.time)}</span>
+                      </div>
+                      <div className="mt-2 flex justify-between text-sm">
+                        <span>السعر: ${formatPrice(t.price)}</span>
+                        <span>الكمية: {t.qty.toFixed(6)}</span>
+                        {t.pnl !== undefined && (
+                          <span className={t.pnl >= 0 ? 'text-green-400' : 'text-red-400'}>
+                            {t.pnl >= 0 ? 'ربح' : 'خسارة'}: {t.pnl >= 0 ? '+' : ''}${t.pnl.toFixed(2)}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+
+            {/* تبويب التحليل */}
+            {tab === 'analysis' && aqScore && (
+              <div className="space-y-4 animate-slideUp">
+                <CoinSelector coins={COINS} selected={coin} onChange={setCoin} />
+                
+                {/* النتيجة الرئيسية */}
+                <div className={`rounded-2xl p-4 bg-gradient-to-br ${aqScore.color} text-center`}>
+                  <p className="text-3xl mb-1">{scoreDesc.emoji}</p>
+                  <p className="text-2xl font-bold">{scoreDesc.text} - {aqScore.percentage.toFixed(0)}%</p>
+                  <p className="mt-2">{scoreDesc.advice}</p>
+                  <p className="text-sm opacity-80 mt-1">نجح {aqScore.passedTests} اختبار من 12</p>
+                </div>
+                
+                {/* المؤشرات المبسطة */}
+                <SimpleIndicatorsCard aqScore={aqScore} price={price} />
+                
+                {/* الاختبارات المفصلة */}
+                <div className="glass rounded-xl p-4">
+                  <p className="font-bold mb-3 text-center">📋 تفاصيل الاختبارات</p>
+                  <SimpleTestsList tests={aqScore.tests} />
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // 🧮 CALCULATOR PAGE
+    // ═══════════════════════════════════════════════════════════════
+    
+    function CalculatorPage() {
+      const [coin, setCoin] = useState(COINS[0]);
+      const [capital, setCapital] = useState('1000');
+      const [risk, setRisk] = useState('2');
+      const [slPercent, setSlPercent] = useState('2');
+      const [result, setResult] = useState(null);
+      
+      const { price, loading } = useMarketData(coin.symbol);
+
+      useEffect(() => {
+        if (!price) return;
+        const c = parseFloat(capital), r = parseFloat(risk), sl = parseFloat(slPercent);
+        if (!c || !r || !sl) return setResult(null);
+        
+        const riskAmt = c * (r / 100);
+        const slPrice = price * (1 - sl / 100);
+        const slDist = price - slPrice;
+        const posSize = riskAmt / slDist;
+        const posVal = posSize * price;
+        
+        const tp1Price = price * (1 + sl * 1.5 / 100);
+        const tp2Price = price * (1 + sl * 2 / 100);
+        const tp3Price = price * (1 + sl * 3 / 100);
+        
+        const tp1Profit = posSize * (tp1Price - price);
+        const tp2Profit = posSize * (tp2Price - price);
+        const tp3Profit = posSize * (tp3Price - price);
+        
+        setResult({ 
+          riskAmt, posSize, posVal, slPrice,
+          tp1: { price: tp1Price, profit: tp1Profit },
+          tp2: { price: tp2Price, profit: tp2Profit },
+          tp3: { price: tp3Price, profit: tp3Profit },
+        });
+      }, [capital, risk, slPercent, price]);
+
+      return (
+        <div className="space-y-4 animate-slideUp">
+          <h2 className="text-xl font-bold text-center">🧮 حاسبة الصفقة</h2>
+          
+          <CoinSelector coins={COINS} selected={coin} onChange={setCoin} />
+          
+          <div className="glass rounded-xl p-4 text-center">
+            <div className="flex items-center justify-center gap-2 mb-2">
+              <span className="text-2xl">{coin.icon}</span>
+              <span className="font-bold">{coin.name}</span>
+            </div>
+            {loading ? (
+              <div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
+            ) : (
+              <p className="text-2xl font-bold text-indigo-400">${formatPrice(price)}</p>
+            )}
+            <p className="text-xs text-gray-400 mt-1">💡 السعر الحالي من Binance</p>
+          </div>
+          
+          <div className="glass rounded-xl p-4 space-y-4">
+            <div>
+              <label className="text-sm text-gray-400">💰 رأس المال (كم معك فلوس؟)</label>
+              <input type="number" value={capital} onChange={e => setCapital(e.target.value)} className="w-full mt-1 p-3 rounded-xl bg-gray-800 border border-gray-700 text-lg" placeholder="مثال: 1000" />
+            </div>
+            
+            <div>
+              <label className="text-sm text-gray-400">⚠️ المخاطرة (كم تقبل تخسر؟)</label>
+              <div className="flex gap-2 mt-1">
+                {['1', '2', '3', '5'].map(r => (
+                  <button key={r} onClick={() => setRisk(r)} className={`flex-1 py-2 rounded-xl flex flex-col items-center ${risk === r ? 'bg-red-600' : 'bg-gray-800'}`}>
+                    <span>{r}%</span>
+                    <span className="text-xs opacity-70">${(parseFloat(capital) * parseFloat(r) / 100).toFixed(0)}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+            
+            <div>
+              <label className="text-sm text-gray-400">🛑 وقف الخسارة (متى تخرج إذا نزل؟)</label>
+              <div className="flex gap-2 mt-1">
+                {['1', '2', '3', '5'].map(s => (
+                  <button key={s} onClick={() => setSlPercent(s)} className={`flex-1 py-2 rounded-xl ${slPercent === s ? 'bg-yellow-600' : 'bg-gray-800'}`}>{s}%</button>
+                ))}
+              </div>
+            </div>
+          </div>
+          
+          {result && (
+            <div className="space-y-3 animate-slideUp">
+              <div className="glass rounded-xl p-4">
+                <p className="text-center text-gray-400 text-sm mb-3">📊 خطة الصفقة</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-indigo-900/30 rounded-xl p-3 text-center">
+                    <p className="text-xs text-gray-400">كمية الشراء</p>
+                    <p className="font-bold">{result.posSize.toFixed(6)}</p>
+                    <p className="text-xs text-gray-500">{coin.name}</p>
+                  </div>
+                  <div className="bg-red-900/30 rounded-xl p-3 text-center">
+                    <p className="text-xs text-gray-400">أقصى خسارة</p>
+                    <p className="font-bold text-red-400">${result.riskAmt.toFixed(2)}</p>
+                  </div>
+                  <div className="bg-yellow-900/30 rounded-xl p-3 text-center col-span-2">
+                    <p className="text-xs text-gray-400">🛑 اخرج إذا وصل السعر لـ</p>
+                    <p className="font-bold text-yellow-400">${formatPrice(result.slPrice)}</p>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="glass rounded-xl p-4">
+                <p className="text-center text-gray-400 text-sm mb-3">🎯 أهداف الربح المتوقعة</p>
+                <div className="space-y-2">
+                  {[
+                    { label: 'هدف 1', data: result.tp1 },
+                    { label: 'هدف 2', data: result.tp2 },
+                    { label: 'هدف 3', data: result.tp3 },
+                  ].map((tp, i) => (
+                    <div key={tp.label} className="flex justify-between items-center p-3 bg-green-900/20 rounded-xl">
+                      <div>
+                        <span className="text-sm">{tp.label}</span>
+                        <p className="text-xs text-gray-400">السعر: ${formatPrice(tp.data.price)}</p>
+                      </div>
+                      <span className="text-green-400 font-bold text-lg">+${tp.data.profit.toFixed(2)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              
+              <div className="bg-gradient-to-r from-indigo-900/50 to-purple-900/50 rounded-xl p-4 text-center">
+                <p className="text-sm text-gray-300">💡 الخلاصة</p>
+                <p className="text-lg mt-2">
+                  اشترِ <span className="text-indigo-400 font-bold">{result.posSize.toFixed(4)} {coin.name}</span>
+                </p>
+                <p className="text-sm text-gray-400 mt-1">
+                  إذا وصل للهدف 2 تربح <span className="text-green-400 font-bold">+${result.tp2.profit.toFixed(2)}</span>
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // 📊 COMPARE PAGE
+    // ═══════════════════════════════════════════════════════════════
+    
+    function ComparePage() {
+      const [results, setResults] = useState([]);
+      const [loading, setLoading] = useState(true);
+
+      useEffect(() => {
+        const scan = async () => {
+          const r = [];
+          for (const coin of COINS) {
+            try {
+              const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${coin.symbol}&interval=4h&limit=100`);
+              const klines = await res.json();
+              const data = klines.map(c => ({ time: c[0], open: parseFloat(c[1]), high: parseFloat(c[2]), low: parseFloat(c[3]), close: parseFloat(c[4]), volume: parseFloat(c[5]) }));
+              const price = data[data.length - 1].close;
+              const aq = calculateAQScore(data, price, null);
+              r.push({ ...coin, price, aq });
+            } catch {}
+          }
+          r.sort((a, b) => (b.aq?.percentage || 0) - (a.aq?.percentage || 0));
+          setResults(r);
+          setLoading(false);
+        };
+        scan();
+        const i = setInterval(scan, 60000);
+        return () => clearInterval(i);
+      }, []);
+
+      if (loading) return <div className="flex justify-center py-10"><div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" /></div>;
+
+      return (
+        <div className="space-y-3 animate-slideUp">
+          <h2 className="text-xl font-bold text-center">📊 مقارنة العملات</h2>
+          <p className="text-center text-sm text-gray-400">مرتبة من الأفضل للأسوأ</p>
+          
+          {results.map((r, i) => {
+            const scoreDesc = r.aq ? getScoreDescription(r.aq.percentage) : null;
+            return (
+              <div key={r.symbol} className={`glass rounded-xl p-4 ${i === 0 && r.aq?.percentage >= 60 ? 'ring-2 ring-green-500' : ''}`}>
+                <div className="flex justify-between items-center">
+                  <div className="flex items-center gap-3">
+                    <span className="text-2xl">{r.icon}</span>
+                    <div>
+                      <p className="font-bold">{r.name}</p>
+                      <p className="text-sm text-gray-400">${formatPrice(r.price)}</p>
+                    </div>
+                  </div>
+                  <div className="text-left">
+                    {scoreDesc && (
+                      <>
+                        <div className="flex items-center gap-1 justify-end">
+                          <span className="text-lg">{scoreDesc.emoji}</span>
+                          <span className={`text-xl font-bold ${scoreDesc.color}`}>{r.aq?.percentage.toFixed(0)}%</span>
+                        </div>
+                        <p className={`text-xs ${scoreDesc.color}`}>{scoreDesc.text}</p>
+                      </>
+                    )}
+                  </div>
+                </div>
+                
+                {/* التوصية */}
+                {scoreDesc && (
+                  <div className={`mt-3 p-2 rounded-lg text-center text-sm ${scoreDesc.bg}`}>
+                    <span className={scoreDesc.color}>{scoreDesc.advice}</span>
+                    <span className="text-gray-400 text-xs mr-2">• نجح {r.aq.passedTests} من 12 اختبار</span>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // 🔔 ALERTS PAGE
+    // ═══════════════════════════════════════════════════════════════
+    
+    function AlertsPage() {
+      const [priceAlerts, setPriceAlerts] = useLocalStorage('aq_price_alerts', []);
+      const [newAlert, setNewAlert] = useState({ coin: 'BTCUSDT', price: '', type: 'above' });
+
+      const addAlert = () => {
+        if (!newAlert.price) return;
+        setPriceAlerts([...priceAlerts, { ...newAlert, id: Date.now() }]);
+        setNewAlert({ ...newAlert, price: '' });
+      };
+
+      return (
+        <div className="space-y-4 animate-slideUp">
+          <h2 className="text-xl font-bold text-center">🔔 التنبيهات</h2>
+          <p className="text-center text-sm text-gray-400">نبهني إذا وصل السعر لـ...</p>
+          
+          <div className="glass rounded-xl p-4">
+            <div className="flex gap-2 mb-3">
+              <select value={newAlert.coin} onChange={e => setNewAlert({ ...newAlert, coin: e.target.value })} className="flex-1 p-2 rounded-xl bg-gray-800">
+                {COINS.map(c => <option key={c.symbol} value={c.symbol}>{c.name}</option>)}
+              </select>
+              <select value={newAlert.type} onChange={e => setNewAlert({ ...newAlert, type: e.target.value })} className="p-2 rounded-xl bg-gray-800">
+                <option value="above">فوق ▲</option>
+                <option value="below">تحت ▼</option>
+              </select>
+            </div>
+            <div className="flex gap-2">
+              <input type="number" value={newAlert.price} onChange={e => setNewAlert({ ...newAlert, price: e.target.value })} placeholder="السعر" className="flex-1 p-2 rounded-xl bg-gray-800" />
+              <button onClick={addAlert} className="px-4 py-2 bg-indigo-600 rounded-xl">إضافة</button>
+            </div>
+          </div>
+          
+          {priceAlerts.length > 0 ? (
+            <div className="glass rounded-xl p-4 space-y-2">
+              {priceAlerts.map(a => (
+                <div key={a.id} className="flex justify-between items-center p-2 bg-gray-800 rounded-lg">
+                  <span>{COINS.find(c => c.symbol === a.coin)?.icon} {COINS.find(c => c.symbol === a.coin)?.name}</span>
+                  <span className={a.type === 'above' ? 'text-green-400' : 'text-red-400'}>
+                    {a.type === 'above' ? '▲ فوق' : '▼ تحت'} ${a.price}
+                  </span>
+                  <button onClick={() => setPriceAlerts(priceAlerts.filter(x => x.id !== a.id))} className="text-red-400">✕</button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="glass rounded-xl p-8 text-center text-gray-400">
+              <p className="text-4xl mb-2">🔔</p>
+              <p>لا توجد تنبيهات</p>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // 📱 MAIN APP
+    // ═══════════════════════════════════════════════════════════════
+    
+    function TabBar({ active, onChange }) {
+      const tabs = [
+        { id: 'home', icon: '🏠', label: 'الرئيسية' },
+        { id: 'compare', icon: '📊', label: 'مقارنة' },
+        { id: 'calc', icon: '🧮', label: 'حاسبة' },
+        { id: 'alerts', icon: '🔔', label: 'تنبيهات' },
+        { id: 'trades', icon: '📋', label: 'الصفقات' },
+      ];
+      return (
+        <div className="fixed bottom-0 left-0 right-0 glass-strong border-t border-white/10 z-40" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
+          <div className="flex justify-around py-2">
+            {tabs.map(t => (
+              <button key={t.id} onClick={() => onChange(t.id)} className={`flex flex-col items-center px-3 py-1 ${active === t.id ? 'text-indigo-400' : 'text-gray-500'}`}>
+                <span className="text-xl">{t.icon}</span>
+                <span className="text-xs mt-1">{t.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    function HomePage({ coin, setCoin, onGoDemo }) {
+      const { data, price, loading } = useMarketData(coin.symbol);
+      const derivData = useDerivativesData(coin.symbol);
+      const aqScore = useMemo(() => calculateAQScore(data, price, derivData), [data, price, derivData]);
+      const allPrices = useAllPrices();
+      const [activeTab, setActiveTab] = useState('result');
+      
+      const scoreDesc = aqScore ? getScoreDescription(aqScore.percentage) : null;
+
+      if (loading) return <div className="flex justify-center items-center h-64"><div className="w-16 h-16 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" /></div>;
+
+      return (
+        <div className="space-y-4 animate-slideUp">
+          <CoinSelector coins={COINS} selected={coin} onChange={setCoin} />
+          
+          {/* زر التدريب */}
+          <button onClick={onGoDemo} className="w-full demo-badge py-4 rounded-xl font-bold text-center">
+            <span className="text-xl">🎓</span>
+            <span className="mr-2">الانتقال لصفحة التدريب →</span>
+          </button>
+          
+          {/* بطاقة النتيجة الرئيسية */}
+          <div className="glass rounded-2xl p-4">
+            <div className="flex justify-between items-center">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-3xl">{coin.icon}</span>
+                  <div>
+                    <p className="font-bold">{coin.name}</p>
+                    <p className="text-xs text-gray-400">{coin.symbol}</p>
+                  </div>
+                </div>
+                <p className="text-2xl font-bold mt-2">${formatPrice(price)}</p>
+                {allPrices[coin.symbol] && (
+                  <p className={`text-sm ${allPrices[coin.symbol].change >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                    {allPrices[coin.symbol].change >= 0 ? '▲' : '▼'} {Math.abs(allPrices[coin.symbol].change).toFixed(2)}%
+                  </p>
+                )}
+              </div>
+              {aqScore && <ScoreRing score={aqScore.percentage} max={100} size="lg" />}
+            </div>
+            
+            {/* التوصية الرئيسية */}
+            {scoreDesc && (
+              <div className={`mt-4 p-4 rounded-xl bg-gradient-to-r ${aqScore.color}`}>
+                <p className="text-xl font-bold text-center">{scoreDesc.emoji} {aqScore.recommendation}</p>
+                <p className="text-center mt-1">{scoreDesc.advice}</p>
+                <p className="text-center text-sm opacity-80 mt-2">
+                  ✅ نجح {aqScore.passedTests} اختبار من 12 اختبار
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* تبويبات التفاصيل */}
+          <div className="flex gap-2">
+            {[
+              { id: 'result', label: '🎯 النتيجة' },
+              { id: 'tests', label: '📋 الاختبارات' },
+              { id: 'derivatives', label: '📈 المشتقات' }
+            ].map(t => (
+              <button key={t.id} onClick={() => setActiveTab(t.id)}
+                className={`flex-1 py-2 rounded-xl text-sm ${activeTab === t.id ? 'bg-indigo-600' : 'glass'}`}>
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          {/* محتوى التبويب */}
+          {activeTab === 'result' && aqScore && (
+            <SimpleIndicatorsCard aqScore={aqScore} price={price} />
+          )}
+
+          {activeTab === 'tests' && aqScore && (
+            <SimpleTestsList tests={aqScore.tests} />
+          )}
+
+          {activeTab === 'derivatives' && derivData && (
+            <SimpleDerivativesCard derivData={derivData} />
+          )}
+        </div>
+      );
+    }
+
+    function TradesPage() {
+      const [trades] = useLocalStorage('aq_real_trades', []);
+      
+      const stats = useMemo(() => {
+        if (trades.length === 0) return null;
+        const sells = trades.filter(t => t.type === 'sell' && t.pnl !== undefined);
+        const wins = sells.filter(t => t.pnl >= 0);
+        const totalPnL = sells.reduce((s, t) => s + t.pnl, 0);
+        return {
+          total: trades.length,
+          sells: sells.length,
+          wins: wins.length,
+          winRate: sells.length > 0 ? (wins.length / sells.length * 100) : 0,
+          totalPnL
+        };
+      }, [trades]);
+
+      return (
+        <div className="space-y-4 animate-slideUp">
+          <h2 className="text-xl font-bold text-center">📋 سجل الصفقات</h2>
+          
+          {stats && (
+            <div className="glass rounded-xl p-4">
+              <div className="grid grid-cols-3 gap-3 text-center">
+                <div>
+                  <p className="text-xs text-gray-400">الصفقات</p>
+                  <p className="font-bold">{stats.total}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-400">نسبة الفوز</p>
+                  <p className={`font-bold ${stats.winRate >= 50 ? 'text-green-400' : 'text-red-400'}`}>{stats.winRate.toFixed(0)}%</p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-400">الربح الكلي</p>
+                  <p className={`font-bold ${stats.totalPnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                    {stats.totalPnL >= 0 ? '+' : ''}${stats.totalPnL.toFixed(2)}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+          
+          {trades.length === 0 ? (
+            <div className="glass rounded-xl p-8 text-center text-gray-400">
+              <p className="text-4xl mb-2">📋</p>
+              <p>لا توجد صفقات مسجلة</p>
+              <p className="text-sm mt-2">سجل صفقاتك الحقيقية هنا</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {trades.slice().reverse().map(t => (
+                <div key={t.id} className="glass rounded-xl p-3">
+                  <div className="flex justify-between">
+                    <span>{t.coinName}</span>
+                    <span className={t.type === 'buy' ? 'text-green-400' : 'text-red-400'}>
+                      {t.type === 'buy' ? 'شراء' : 'بيع'}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function App() {
+      const [mode, setMode] = useState('main');
+      const [page, setPage] = useState('home');
+      const [coin, setCoin] = useState(COINS[0]);
+
+      if (mode === 'demo') return <DemoTradingPage onBack={() => setMode('main')} />;
+
+      return (
+        <div className="min-h-screen bg-[#0a0a0f] text-white pb-24">
+          <div className="bg-gradient-to-r from-indigo-900 via-purple-900 to-fuchsia-900 p-4 sticky top-0 z-30">
+            <div className="flex justify-between items-center">
+              <div>
+                <h1 className="text-xl font-bold">⚡ AQ Pro</h1>
+                <p className="text-xs text-purple-200">المنصة الشاملة</p>
+              </div>
+              <span className="px-3 py-1 rounded-full text-xs bg-green-600 animate-pulse">LIVE</span>
+            </div>
+          </div>
+
+          <div className="p-4">
+            {page === 'home' && <HomePage coin={coin} setCoin={setCoin} onGoDemo={() => setMode('demo')} />}
+            {page === 'compare' && <ComparePage />}
+            {page === 'calc' && <CalculatorPage />}
+            {page === 'alerts' && <AlertsPage />}
+            {page === 'trades' && <TradesPage />}
+          </div>
+
+          <TabBar active={page} onChange={setPage} />
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  </script>
+</body>
+</html>
