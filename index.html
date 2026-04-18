@@ -1,0 +1,1388 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="AQ Pro">
+  <meta name="theme-color" content="#6366f1">
+  <title>⚡ AQ Pro - المنصة الشاملة</title>
+  
+  <link rel="manifest" href="manifest.json">
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <style>
+    * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
+    body { 
+      margin: 0; padding: 0; background: #0a0a0f; 
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    }
+    ::-webkit-scrollbar { display: none; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes glow { 0%, 100% { box-shadow: 0 0 5px currentColor; } 50% { box-shadow: 0 0 25px currentColor; } }
+    @keyframes slideUp { from { opacity: 0; transform: translateY(30px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes ring { 0% { transform: scale(1); } 50% { transform: scale(1.1); } 100% { transform: scale(1); } }
+    @keyframes confetti { 0% { transform: translateY(0) rotate(0); opacity: 1; } 100% { transform: translateY(100px) rotate(720deg); opacity: 0; } }
+    .animate-pulse { animation: pulse 2s infinite; }
+    .animate-spin { animation: spin 1s linear infinite; }
+    .animate-glow { animation: glow 2s infinite; }
+    .animate-slideUp { animation: slideUp 0.4s ease-out; }
+    .animate-ring { animation: ring 0.3s ease-in-out 3; }
+    .glass { background: rgba(255,255,255,0.05); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.1); }
+    .glass-strong { background: rgba(255,255,255,0.1); backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.2); }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    .demo-badge { background: linear-gradient(135deg, #f59e0b, #d97706); }
+    .live-badge { background: linear-gradient(135deg, #22c55e, #16a34a); }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  
+  <script type="text/babel">
+    const { useState, useEffect, useMemo, useRef, useCallback } = React;
+
+    // ═══════════════════════════════════════════════════════════════
+    // 🔧 UTILITY FUNCTIONS
+    // ═══════════════════════════════════════════════════════════════
+    
+    const formatPrice = (p) => {
+      if (!p || isNaN(p)) return '-';
+      if (p >= 1000) return p.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      return p.toFixed(p >= 1 ? 4 : 6);
+    };
+    
+    const formatMoney = (n) => {
+      if (n >= 1000000) return `$${(n/1000000).toFixed(2)}M`;
+      if (n >= 1000) return `$${(n/1000).toFixed(2)}K`;
+      return `$${n.toFixed(2)}`;
+    };
+
+    const formatTime = (date) => new Date(date).toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' });
+    const formatDate = (date) => new Date(date).toLocaleDateString('ar-SA', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+    // ═══════════════════════════════════════════════════════════════
+    // 📊 TECHNICAL ANALYSIS FUNCTIONS
+    // ═══════════════════════════════════════════════════════════════
+    
+    const calculateEMA = (data, period) => {
+      const result = [];
+      const mult = 2 / (period + 1);
+      let ema = data.slice(0, period).reduce((a, b) => a + b.close, 0) / period;
+      for (let i = 0; i < data.length; i++) {
+        if (i < period - 1) result.push(null);
+        else if (i === period - 1) result.push(ema);
+        else { ema = (data[i].close - ema) * mult + ema; result.push(ema); }
+      }
+      return result;
+    };
+
+    const calculateRSI = (data, period = 14) => {
+      const result = [null];
+      const gains = [], losses = [];
+      for (let i = 1; i < data.length; i++) {
+        const change = data[i].close - data[i - 1].close;
+        gains.push(change > 0 ? change : 0);
+        losses.push(change < 0 ? Math.abs(change) : 0);
+      }
+      for (let i = 0; i < gains.length; i++) {
+        if (i < period - 1) result.push(null);
+        else {
+          const avgGain = gains.slice(Math.max(0, i - period + 1), i + 1).reduce((a, b) => a + b, 0) / period;
+          const avgLoss = losses.slice(Math.max(0, i - period + 1), i + 1).reduce((a, b) => a + b, 0) / period;
+          result.push(avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss)));
+        }
+      }
+      return result;
+    };
+
+    const calculateMACD = (data) => {
+      const ema12 = calculateEMA(data, 12);
+      const ema26 = calculateEMA(data, 26);
+      const macdLine = ema12.map((v, i) => v && ema26[i] ? v - ema26[i] : null);
+      const macdData = data.map((_, i) => ({ close: macdLine[i] || 0 }));
+      const signalLine = calculateEMA(macdData, 9);
+      const histogram = macdLine.map((v, i) => v && signalLine[i] ? v - signalLine[i] : null);
+      return { macdLine, signalLine, histogram };
+    };
+
+    const calculateStochastic = (data, kPeriod = 14) => {
+      return data.map((_, i) => {
+        if (i < kPeriod - 1) return null;
+        const slice = data.slice(i - kPeriod + 1, i + 1);
+        const high = Math.max(...slice.map(d => d.high));
+        const low = Math.min(...slice.map(d => d.low));
+        return high === low ? 50 : ((data[i].close - low) / (high - low)) * 100;
+      });
+    };
+
+    const calculateBollingerBands = (data, period = 20) => {
+      const sma = data.map((_, i) => {
+        if (i < period - 1) return null;
+        return data.slice(i - period + 1, i + 1).reduce((a, b) => a + b.close, 0) / period;
+      });
+      return {
+        upper: sma.map((mean, i) => {
+          if (!mean) return null;
+          const slice = data.slice(i - period + 1, i + 1).map(d => d.close);
+          const std = Math.sqrt(slice.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / period);
+          return mean + 2 * std;
+        }),
+        middle: sma,
+        lower: sma.map((mean, i) => {
+          if (!mean) return null;
+          const slice = data.slice(i - period + 1, i + 1).map(d => d.close);
+          const std = Math.sqrt(slice.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / period);
+          return mean - 2 * std;
+        })
+      };
+    };
+
+    const calculateATR = (data, period = 14) => {
+      const tr = data.map((d, i) => {
+        if (i === 0) return d.high - d.low;
+        return Math.max(d.high - d.low, Math.abs(d.high - data[i-1].close), Math.abs(d.low - data[i-1].close));
+      });
+      return tr.map((_, i) => i < period - 1 ? null : tr.slice(i - period + 1, i + 1).reduce((a, b) => a + b, 0) / period);
+    };
+
+    const calculateVWAP = (data) => {
+      let cumVol = 0, cumVolPrice = 0;
+      return data.map(d => {
+        cumVol += d.volume;
+        cumVolPrice += ((d.high + d.low + d.close) / 3) * d.volume;
+        return cumVol > 0 ? cumVolPrice / cumVol : null;
+      });
+    };
+
+    const calculateFibonacci = (high, low) => ({
+      0: low, 23.6: low + (high - low) * 0.236, 38.2: low + (high - low) * 0.382,
+      50: low + (high - low) * 0.5, 61.8: low + (high - low) * 0.618,
+      78.6: low + (high - low) * 0.786, 100: high
+    });
+
+    const detectCandlePatterns = (data) => {
+      if (data.length < 3) return [];
+      const patterns = [];
+      const c = data[data.length - 1], p1 = data[data.length - 2];
+      const body = Math.abs(c.close - c.open), range = c.high - c.low;
+      const upperWick = c.high - Math.max(c.open, c.close);
+      const lowerWick = Math.min(c.open, c.close) - c.low;
+      
+      if (body < range * 0.1) patterns.push({ name: 'دوجي', type: 'neutral', strength: 50 });
+      if (lowerWick > body * 2 && upperWick < body * 0.5 && c.close > c.open)
+        patterns.push({ name: 'المطرقة', type: 'bullish', strength: 70 });
+      if (upperWick > body * 2 && lowerWick < body * 0.5 && c.close < c.open)
+        patterns.push({ name: 'نجمة ساقطة', type: 'bearish', strength: 70 });
+      if (p1.close < p1.open && c.close > c.open && c.open < p1.close && c.close > p1.open)
+        patterns.push({ name: 'ابتلاع صعودي', type: 'bullish', strength: 85 });
+      if (p1.close > p1.open && c.close < c.open && c.open > p1.close && c.close < p1.open)
+        patterns.push({ name: 'ابتلاع هبوطي', type: 'bearish', strength: 85 });
+      
+      return patterns;
+    };
+
+    const detectRSIDivergence = (data, rsi) => {
+      const last = data.length - 1;
+      if (last < 15 || !rsi[last]) return { bullish: false, bearish: false };
+      for (let i = last - 10; i < last - 3; i++) {
+        if (!rsi[i]) continue;
+        if (data[last].low < data[i].low && rsi[last] > rsi[i] && rsi[last] < 40)
+          return { bullish: true, bearish: false };
+        if (data[last].high > data[i].high && rsi[last] < rsi[i] && rsi[last] > 60)
+          return { bullish: false, bearish: true };
+      }
+      return { bullish: false, bearish: false };
+    };
+
+    // ═══════════════════════════════════════════════════════════════
+    // 🪙 COINS & CONSTANTS
+    // ═══════════════════════════════════════════════════════════════
+    
+    const COINS = [
+      { symbol: 'BTCUSDT', name: 'بيتكوين', icon: '₿', color: '#f7931a' },
+      { symbol: 'ETHUSDT', name: 'إيثيريوم', icon: 'Ξ', color: '#627eea' },
+      { symbol: 'BNBUSDT', name: 'BNB', icon: '◈', color: '#f3ba2f' },
+      { symbol: 'SOLUSDT', name: 'سولانا', icon: '◎', color: '#00ffa3' },
+      { symbol: 'XRPUSDT', name: 'ريبل', icon: '✕', color: '#00aae4' },
+    ];
+
+    const INITIAL_DEMO_BALANCE = 10000;
+
+    // ═══════════════════════════════════════════════════════════════
+    // 🔔 NOTIFICATION SYSTEM
+    // ═══════════════════════════════════════════════════════════════
+    
+    const playSound = (type = 'alert') => {
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.frequency.value = type === 'success' ? 800 : type === 'error' ? 300 : 600;
+        osc.type = 'sine';
+        gain.gain.setValueAtTime(0.2, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
+        osc.start(ctx.currentTime);
+        osc.stop(ctx.currentTime + 0.3);
+      } catch (e) {}
+    };
+
+    const vibrate = (pattern = [100]) => {
+      if (navigator.vibrate) navigator.vibrate(pattern);
+    };
+
+    // ═══════════════════════════════════════════════════════════════
+    // 💾 LOCAL STORAGE HOOKS
+    // ═══════════════════════════════════════════════════════════════
+    
+    const useLocalStorage = (key, initialValue) => {
+      const [value, setValue] = useState(() => {
+        try {
+          const item = localStorage.getItem(key);
+          return item ? JSON.parse(item) : initialValue;
+        } catch { return initialValue; }
+      });
+      
+      useEffect(() => {
+        try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+      }, [key, value]);
+      
+      return [value, setValue];
+    };
+
+    // ═══════════════════════════════════════════════════════════════
+    // 🎯 AQ SCORE CALCULATOR
+    // ═══════════════════════════════════════════════════════════════
+    
+    const calculateAQScore = (data, price, derivData) => {
+      if (!data || data.length < 30) return null;
+      
+      const last = data.length - 1;
+      const high = Math.max(...data.map(d => d.high));
+      const low = Math.min(...data.map(d => d.low));
+      
+      const ema20 = calculateEMA(data, 20);
+      const ema50 = calculateEMA(data, 50);
+      const rsi = calculateRSI(data);
+      const macd = calculateMACD(data);
+      const stoch = calculateStochastic(data);
+      const bb = calculateBollingerBands(data);
+      const atr = calculateATR(data);
+      const vwap = calculateVWAP(data);
+      const fib = calculateFibonacci(high, low);
+      const patterns = detectCandlePatterns(data);
+      const divergence = detectRSIDivergence(data, rsi);
+
+      const tests = [];
+      let totalScore = 0;
+
+      // Test 1: EMA Trend
+      const emaTest = price > ema20[last] && ema20[last] > ema50[last];
+      tests.push({ id: 1, name: 'اتجاه EMA', passed: emaTest, actual: `السعر ${price > ema20[last] ? 'فوق' : 'تحت'} EMA20`, required: 'السعر > EMA20 > EMA50', score: emaTest ? 8 : 0, maxScore: 8 });
+      totalScore += emaTest ? 8 : 0;
+
+      // Test 2: RSI
+      const rsiVal = rsi[last];
+      tests.push({ id: 2, name: 'RSI', passed: rsiVal < 30, actual: `RSI = ${rsiVal?.toFixed(1)}`, required: 'RSI < 30', score: rsiVal < 30 ? 10 : rsiVal < 40 ? 5 : 3, maxScore: 10 });
+      totalScore += rsiVal < 30 ? 10 : rsiVal < 40 ? 5 : 3;
+
+      // Test 3: RSI Divergence
+      tests.push({ id: 3, name: 'RSI Divergence', passed: divergence.bullish, actual: divergence.bullish ? '🔥 Bullish!' : 'لا يوجد', required: 'Bullish Divergence', score: divergence.bullish ? 12 : 0, maxScore: 12 });
+      totalScore += divergence.bullish ? 12 : 0;
+
+      // Test 4: MACD
+      const macdVal = macd.macdLine[last];
+      const macdSig = macd.signalLine[last];
+      const macdTest = macdVal > macdSig;
+      tests.push({ id: 4, name: 'MACD', passed: macdTest, actual: `MACD ${macdTest ? '>' : '<'} Signal`, required: 'MACD > Signal', score: macdTest ? 8 : 0, maxScore: 8 });
+      totalScore += macdTest ? 8 : 0;
+
+      // Test 5: Stochastic
+      const stochVal = stoch[last];
+      tests.push({ id: 5, name: 'Stochastic', passed: stochVal < 20, actual: `%K = ${stochVal?.toFixed(1)}`, required: '%K < 20', score: stochVal < 20 ? 6 : stochVal < 40 ? 3 : 0, maxScore: 6 });
+      totalScore += stochVal < 20 ? 6 : stochVal < 40 ? 3 : 0;
+
+      // Test 6: Bollinger Bands
+      const bbTest = price < bb.lower[last];
+      tests.push({ id: 6, name: 'Bollinger', passed: bbTest, actual: `السعر ${bbTest ? 'تحت' : 'فوق'} الباند السفلي`, required: 'السعر < Lower Band', score: bbTest ? 8 : price < bb.middle[last] ? 4 : 0, maxScore: 8 });
+      totalScore += bbTest ? 8 : price < bb.middle[last] ? 4 : 0;
+
+      // Test 7: VWAP
+      const vwapTest = price > vwap[last];
+      tests.push({ id: 7, name: 'VWAP', passed: vwapTest, actual: `السعر ${vwapTest ? 'فوق' : 'تحت'} VWAP`, required: 'السعر > VWAP', score: vwapTest ? 6 : 0, maxScore: 6 });
+      totalScore += vwapTest ? 6 : 0;
+
+      // Test 8: Fibonacci
+      const nearFib = Object.entries(fib).find(([k, v]) => Math.abs(price - v) / price < 0.02);
+      const fibTest = nearFib && ['38.2', '50', '61.8'].includes(nearFib[0]);
+      tests.push({ id: 8, name: 'فيبوناتشي', passed: fibTest, actual: nearFib ? `قريب من ${nearFib[0]}%` : 'بعيد', required: 'قريب من 38.2/50/61.8%', score: fibTest ? 8 : nearFib ? 4 : 0, maxScore: 8 });
+      totalScore += fibTest ? 8 : nearFib ? 4 : 0;
+
+      // Test 9: Candle Patterns
+      const bullishPattern = patterns.find(p => p.type === 'bullish');
+      tests.push({ id: 9, name: 'أنماط الشموع', passed: !!bullishPattern, actual: bullishPattern ? `🕯️ ${bullishPattern.name}` : 'لا توجد', required: 'نمط صعودي', score: bullishPattern ? 8 : 0, maxScore: 8 });
+      totalScore += bullishPattern ? 8 : 0;
+
+      // Test 10: Funding Rate
+      const fundingTest = derivData && derivData.fundingRate < 0;
+      tests.push({ id: 10, name: 'Funding Rate', passed: fundingTest, actual: derivData ? `${derivData.fundingRate.toFixed(4)}%` : 'N/A', required: 'Funding < 0', score: fundingTest ? 8 : derivData && derivData.fundingRate < 0.01 ? 4 : 0, maxScore: 8 });
+      totalScore += fundingTest ? 8 : derivData && derivData.fundingRate < 0.01 ? 4 : 0;
+
+      // Test 11: Long/Short Ratio
+      const lsTest = derivData && derivData.longShortRatio < 1;
+      tests.push({ id: 11, name: 'Long/Short', passed: lsTest, actual: derivData ? `${derivData.longShortRatio.toFixed(2)}` : 'N/A', required: 'L/S < 1', score: lsTest ? 8 : derivData && derivData.longShortRatio < 1.2 ? 4 : 0, maxScore: 8 });
+      totalScore += lsTest ? 8 : derivData && derivData.longShortRatio < 1.2 ? 4 : 0;
+
+      // Test 12: ATR
+      const atrVal = atr[last];
+      const atrPercent = (atrVal / price) * 100;
+      const atrTest = atrPercent < 5;
+      tests.push({ id: 12, name: 'التقلب ATR', passed: atrTest, actual: `${atrPercent.toFixed(2)}%`, required: 'ATR < 5%', score: atrTest ? 6 : atrPercent < 8 ? 3 : 0, maxScore: 6 });
+      totalScore += atrTest ? 6 : atrPercent < 8 ? 3 : 0;
+
+      const maxScore = 100;
+      const percentage = (totalScore / maxScore) * 100;
+      const passedTests = tests.filter(t => t.passed).length;
+
+      let recommendation, confidence, color;
+      if (percentage >= 75) { recommendation = '🟢 شراء قوي'; confidence = 'عالية جداً'; color = 'from-green-600 to-emerald-700'; }
+      else if (percentage >= 60) { recommendation = '🟢 شراء'; confidence = 'عالية'; color = 'from-green-700 to-green-800'; }
+      else if (percentage >= 45) { recommendation = '🟡 انتظار'; confidence = 'متوسطة'; color = 'from-yellow-600 to-amber-700'; }
+      else if (percentage >= 30) { recommendation = '🔴 بيع'; confidence = 'عالية'; color = 'from-red-700 to-red-800'; }
+      else { recommendation = '🔴 بيع قوي'; confidence = 'عالية جداً'; color = 'from-red-600 to-rose-700'; }
+
+      return {
+        tests, totalScore, maxScore, percentage, passedTests,
+        recommendation, confidence, color,
+        indicators: { ema20: ema20[last], ema50: ema50[last], rsi: rsiVal, atr: atrVal, vwap: vwap[last], fib },
+        patterns, divergence
+      };
+    };
+
+    // ═══════════════════════════════════════════════════════════════
+    // 🔌 DATA HOOKS
+    // ═══════════════════════════════════════════════════════════════
+    
+    function useMarketData(symbol) {
+      const [data, setData] = useState([]);
+      const [price, setPrice] = useState(null);
+      const [loading, setLoading] = useState(true);
+      const wsRef = useRef(null);
+
+      useEffect(() => {
+        const fetchKlines = async () => {
+          try {
+            const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=4h&limit=100`);
+            const json = await res.json();
+            setData(json.map(c => ({
+              time: c[0], open: parseFloat(c[1]), high: parseFloat(c[2]),
+              low: parseFloat(c[3]), close: parseFloat(c[4]), volume: parseFloat(c[5])
+            })));
+            setPrice(parseFloat(json[json.length - 1][4]));
+            setLoading(false);
+          } catch (e) { setLoading(false); }
+        };
+
+        fetchKlines();
+        const interval = setInterval(fetchKlines, 60000);
+
+        const ws = new WebSocket(`wss://stream.binance.com:9443/ws/${symbol.toLowerCase()}@trade`);
+        wsRef.current = ws;
+        ws.onmessage = (e) => setPrice(parseFloat(JSON.parse(e.data).p));
+        
+        return () => { clearInterval(interval); ws.close(); };
+      }, [symbol]);
+
+      return { data, price, loading };
+    }
+
+    function useDerivativesData(symbol) {
+      const [data, setData] = useState(null);
+
+      useEffect(() => {
+        const fetchData = async () => {
+          try {
+            const [fundingRes, lsRes] = await Promise.all([
+              fetch(`https://fapi.binance.com/fapi/v1/fundingRate?symbol=${symbol}&limit=1`),
+              fetch(`https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=${symbol}&period=1h&limit=1`)
+            ]);
+            const [funding, ls] = await Promise.all([fundingRes.json(), lsRes.json()]);
+            setData({
+              fundingRate: parseFloat(funding[0]?.fundingRate || 0) * 100,
+              longShortRatio: parseFloat(ls[0]?.longShortRatio || 1),
+              longAccount: parseFloat(ls[0]?.longAccount || 0.5) * 100,
+              shortAccount: parseFloat(ls[0]?.shortAccount || 0.5) * 100,
+            });
+          } catch {
+            setData({
+              fundingRate: (Math.random() - 0.5) * 0.04,
+              longShortRatio: 0.8 + Math.random() * 0.6,
+              longAccount: 45 + Math.random() * 15,
+              shortAccount: 40 + Math.random() * 15,
+            });
+          }
+        };
+        fetchData();
+        const interval = setInterval(fetchData, 30000);
+        return () => clearInterval(interval);
+      }, [symbol]);
+
+      return data;
+    }
+
+    function useAllPrices() {
+      const [prices, setPrices] = useState({});
+
+      useEffect(() => {
+        const fetchPrices = async () => {
+          try {
+            const res = await fetch('https://api.binance.com/api/v3/ticker/price');
+            const data = await res.json();
+            const priceMap = {};
+            data.forEach(t => { priceMap[t.symbol] = parseFloat(t.price); });
+            setPrices(priceMap);
+          } catch {}
+        };
+        fetchPrices();
+        const interval = setInterval(fetchPrices, 5000);
+        return () => clearInterval(interval);
+      }, []);
+
+      return prices;
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // 🎨 SHARED COMPONENTS
+    // ═══════════════════════════════════════════════════════════════
+    
+    function CoinSelector({ coins, selected, onChange }) {
+      return (
+        <div className="flex gap-2 overflow-x-auto pb-2 no-scrollbar -mx-4 px-4">
+          {coins.map(c => (
+            <button key={c.symbol} onClick={() => onChange(c)}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl whitespace-nowrap transition-all ${
+                selected.symbol === c.symbol ? 'bg-indigo-600 shadow-lg' : 'glass'
+              }`}>
+              <span className="text-lg">{c.icon}</span>
+              <span className="text-sm">{c.name}</span>
+            </button>
+          ))}
+        </div>
+      );
+    }
+
+    function ScoreRing({ score, max, size = 'md' }) {
+      const pct = (score / max) * 100;
+      const color = pct >= 70 ? '#22c55e' : pct >= 40 ? '#eab308' : '#ef4444';
+      const dims = size === 'lg' ? 'w-20 h-20' : 'w-14 h-14';
+      const textSize = size === 'lg' ? 'text-xl' : 'text-sm';
+      
+      return (
+        <div className={`relative ${dims}`}>
+          <svg viewBox="0 0 36 36" className="w-full h-full -rotate-90">
+            <circle cx="18" cy="18" r="15" fill="none" stroke="#374151" strokeWidth="3" />
+            <circle cx="18" cy="18" r="15" fill="none" stroke={color} strokeWidth="3"
+              strokeDasharray={`${pct} 100`} strokeLinecap="round" />
+          </svg>
+          <div className="absolute inset-0 flex items-center justify-center">
+            <span className={`${textSize} font-bold`}>{pct.toFixed(0)}%</span>
+          </div>
+        </div>
+      );
+    }
+
+    function TestCard({ test }) {
+      return (
+        <div className={`p-3 rounded-xl border-r-4 ${test.passed ? 'bg-green-900/20 border-green-500' : 'bg-red-900/20 border-red-500'}`}>
+          <div className="flex justify-between items-center mb-1">
+            <span className="font-bold text-sm">{test.name}</span>
+            <span className={`text-xs px-2 py-0.5 rounded ${test.passed ? 'bg-green-900 text-green-300' : 'bg-red-900 text-red-300'}`}>
+              {test.score}/{test.maxScore}
+            </span>
+          </div>
+          <p className="text-xs text-gray-300">📍 {test.actual}</p>
+          <p className="text-xs text-gray-500">✓ {test.required}</p>
+        </div>
+      );
+    }
+
+    function Toast({ message, type = 'success', onClose }) {
+      useEffect(() => {
+        const timer = setTimeout(onClose, 3000);
+        return () => clearTimeout(timer);
+      }, [onClose]);
+
+      return (
+        <div className={`fixed top-20 left-4 right-4 p-4 rounded-xl z-50 animate-slideUp ${
+          type === 'success' ? 'bg-green-600' : type === 'error' ? 'bg-red-600' : 'bg-yellow-600'
+        }`}>
+          <p className="text-center font-bold">{message}</p>
+        </div>
+      );
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // 🎓 DEMO TRADING PAGE
+    // ═══════════════════════════════════════════════════════════════
+    
+    function DemoTradingPage({ onBack }) {
+      const [coin, setCoin] = useState(COINS[0]);
+      const [balance, setBalance] = useLocalStorage('demo_balance', INITIAL_DEMO_BALANCE);
+      const [portfolio, setPortfolio] = useLocalStorage('demo_portfolio', {});
+      const [trades, setTrades] = useLocalStorage('demo_trades', []);
+      const [orderType, setOrderType] = useState('buy');
+      const [amount, setAmount] = useState('');
+      const [toast, setToast] = useState(null);
+      const [tab, setTab] = useState('trade');
+
+      const { data, price, loading } = useMarketData(coin.symbol);
+      const derivData = useDerivativesData(coin.symbol);
+      const aqScore = useMemo(() => calculateAQScore(data, price, derivData), [data, price, derivData]);
+      const allPrices = useAllPrices();
+
+      // Calculate portfolio value
+      const portfolioValue = useMemo(() => {
+        let total = balance;
+        Object.entries(portfolio).forEach(([symbol, qty]) => {
+          const currentPrice = allPrices[symbol] || 0;
+          total += qty * currentPrice;
+        });
+        return total;
+      }, [balance, portfolio, allPrices]);
+
+      const totalPnL = portfolioValue - INITIAL_DEMO_BALANCE;
+      const totalPnLPercent = ((portfolioValue - INITIAL_DEMO_BALANCE) / INITIAL_DEMO_BALANCE) * 100;
+
+      const stats = useMemo(() => {
+        const closed = trades.filter(t => t.type === 'sell');
+        const wins = closed.filter(t => t.pnl > 0);
+        return {
+          totalTrades: trades.length,
+          winRate: closed.length > 0 ? (wins.length / closed.length) * 100 : 0,
+          totalPnL: closed.reduce((sum, t) => sum + (t.pnl || 0), 0)
+        };
+      }, [trades]);
+
+      const executeTrade = () => {
+        const qty = parseFloat(amount);
+        if (!qty || qty <= 0 || !price) return;
+
+        const totalCost = qty * price;
+        const coinKey = coin.symbol;
+
+        if (orderType === 'buy') {
+          if (totalCost > balance) {
+            playSound('error');
+            vibrate([100, 50, 100]);
+            setToast({ message: '❌ رصيد غير كافي!', type: 'error' });
+            return;
+          }
+
+          setBalance(prev => prev - totalCost);
+          setPortfolio(prev => ({
+            ...prev,
+            [coinKey]: (prev[coinKey] || 0) + qty
+          }));
+          setTrades(prev => [...prev, {
+            id: Date.now(),
+            coin: coinKey,
+            coinName: coin.name,
+            type: 'buy',
+            price,
+            qty,
+            total: totalCost,
+            time: Date.now()
+          }]);
+
+          playSound('success');
+          vibrate([100]);
+          setToast({ message: `✅ تم شراء ${qty} ${coin.name} بسعر $${formatPrice(price)}`, type: 'success' });
+
+        } else {
+          const holdings = portfolio[coinKey] || 0;
+          if (qty > holdings) {
+            playSound('error');
+            vibrate([100, 50, 100]);
+            setToast({ message: '❌ كمية غير كافية للبيع!', type: 'error' });
+            return;
+          }
+
+          // Calculate average buy price for PnL
+          const buys = trades.filter(t => t.coin === coinKey && t.type === 'buy');
+          const avgBuyPrice = buys.reduce((sum, t) => sum + t.price * t.qty, 0) / buys.reduce((sum, t) => sum + t.qty, 0) || price;
+          const pnl = (price - avgBuyPrice) * qty;
+
+          setBalance(prev => prev + totalCost);
+          setPortfolio(prev => {
+            const newQty = (prev[coinKey] || 0) - qty;
+            if (newQty <= 0) {
+              const { [coinKey]: _, ...rest } = prev;
+              return rest;
+            }
+            return { ...prev, [coinKey]: newQty };
+          });
+          setTrades(prev => [...prev, {
+            id: Date.now(),
+            coin: coinKey,
+            coinName: coin.name,
+            type: 'sell',
+            price,
+            qty,
+            total: totalCost,
+            pnl,
+            time: Date.now()
+          }]);
+
+          playSound(pnl >= 0 ? 'success' : 'error');
+          vibrate(pnl >= 0 ? [100, 50, 100, 50, 100] : [300]);
+          setToast({ 
+            message: `${pnl >= 0 ? '🎉' : '😔'} تم بيع ${qty} ${coin.name} | P&L: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}`, 
+            type: pnl >= 0 ? 'success' : 'error' 
+          });
+        }
+
+        setAmount('');
+      };
+
+      const resetDemo = () => {
+        if (confirm('هل أنت متأكد؟ سيتم حذف كل البيانات!')) {
+          setBalance(INITIAL_DEMO_BALANCE);
+          setPortfolio({});
+          setTrades([]);
+          setToast({ message: '🔄 تم إعادة تعيين الحساب!', type: 'success' });
+        }
+      };
+
+      const setPercentage = (pct) => {
+        if (orderType === 'buy') {
+          const maxQty = (balance * pct) / price;
+          setAmount(maxQty.toFixed(6));
+        } else {
+          const holdings = portfolio[coin.symbol] || 0;
+          setAmount((holdings * pct).toFixed(6));
+        }
+      };
+
+      return (
+        <div className="min-h-screen bg-[#0a0a0f] text-white pb-6">
+          {toast && <Toast {...toast} onClose={() => setToast(null)} />}
+          
+          {/* Demo Header */}
+          <div className="demo-badge p-4 sticky top-0 z-30">
+            <div className="flex justify-between items-center">
+              <button onClick={onBack} className="text-2xl">←</button>
+              <div className="text-center">
+                <div className="flex items-center justify-center gap-2">
+                  <span className="text-xl">🎓</span>
+                  <h1 className="text-lg font-bold">وضع التدريب</h1>
+                </div>
+                <p className="text-xs opacity-80">أموال وهمية - بدون مخاطرة</p>
+              </div>
+              <button onClick={resetDemo} className="text-sm bg-white/20 px-3 py-1 rounded-lg">
+                🔄 إعادة
+              </button>
+            </div>
+          </div>
+
+          <div className="p-4 space-y-4">
+            {/* Portfolio Summary */}
+            <div className="glass rounded-2xl p-4">
+              <div className="grid grid-cols-3 gap-3 text-center">
+                <div>
+                  <p className="text-xs text-gray-400">الرصيد</p>
+                  <p className="font-bold text-lg">{formatMoney(balance)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-400">قيمة المحفظة</p>
+                  <p className="font-bold text-lg text-indigo-400">{formatMoney(portfolioValue)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-400">P&L</p>
+                  <p className={`font-bold text-lg ${totalPnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                    {totalPnL >= 0 ? '+' : ''}{formatMoney(totalPnL)}
+                  </p>
+                </div>
+              </div>
+              <div className="mt-3 bg-gray-800 rounded-full h-2 overflow-hidden">
+                <div 
+                  className={`h-full transition-all ${totalPnL >= 0 ? 'bg-green-500' : 'bg-red-500'}`}
+                  style={{ width: `${Math.min(100, Math.max(0, 50 + totalPnLPercent))}%` }}
+                />
+              </div>
+              <p className="text-center text-xs text-gray-500 mt-1">
+                {totalPnLPercent >= 0 ? '+' : ''}{totalPnLPercent.toFixed(2)}% من رأس المال
+              </p>
+            </div>
+
+            {/* Tabs */}
+            <div className="flex gap-2">
+              {[
+                { id: 'trade', label: '📈 تداول' },
+                { id: 'portfolio', label: '💼 المحفظة' },
+                { id: 'history', label: '📜 السجل' },
+                { id: 'analysis', label: '🎯 التحليل' },
+              ].map(t => (
+                <button key={t.id} onClick={() => setTab(t.id)}
+                  className={`flex-1 py-2 rounded-xl text-xs ${tab === t.id ? 'bg-amber-600' : 'glass'}`}>
+                  {t.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Trade Tab */}
+            {tab === 'trade' && (
+              <div className="space-y-4 animate-slideUp">
+                <CoinSelector coins={COINS} selected={coin} onChange={setCoin} />
+
+                {/* Price & AQ Score */}
+                <div className="glass rounded-xl p-4">
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-2xl">{coin.icon}</span>
+                        <span className="font-bold">{coin.name}</span>
+                      </div>
+                      <p className="text-xl font-bold mt-1">${formatPrice(price)}</p>
+                    </div>
+                    {aqScore && <ScoreRing score={aqScore.percentage} max={100} size="lg" />}
+                  </div>
+                  {aqScore && (
+                    <div className={`mt-3 p-2 rounded-lg bg-gradient-to-r ${aqScore.color} text-center text-sm`}>
+                      {aqScore.recommendation} | {aqScore.passedTests}/12 ✓
+                    </div>
+                  )}
+                </div>
+
+                {/* Holdings */}
+                {portfolio[coin.symbol] > 0 && (
+                  <div className="glass rounded-xl p-3 text-center">
+                    <p className="text-xs text-gray-400">رصيدك من {coin.name}</p>
+                    <p className="text-lg font-bold">{portfolio[coin.symbol].toFixed(6)} {coin.symbol.replace('USDT', '')}</p>
+                    <p className="text-sm text-gray-400">≈ ${formatPrice(portfolio[coin.symbol] * price)}</p>
+                  </div>
+                )}
+
+                {/* Order Form */}
+                <div className="glass rounded-2xl p-4 space-y-4">
+                  <div className="flex gap-2">
+                    <button onClick={() => setOrderType('buy')}
+                      className={`flex-1 py-3 rounded-xl font-bold ${orderType === 'buy' ? 'bg-green-600' : 'bg-gray-800'}`}>
+                      🟢 شراء
+                    </button>
+                    <button onClick={() => setOrderType('sell')}
+                      className={`flex-1 py-3 rounded-xl font-bold ${orderType === 'sell' ? 'bg-red-600' : 'bg-gray-800'}`}>
+                      🔴 بيع
+                    </button>
+                  </div>
+
+                  <div>
+                    <label className="text-sm text-gray-400">الكمية ({coin.symbol.replace('USDT', '')})</label>
+                    <input type="number" value={amount} onChange={e => setAmount(e.target.value)}
+                      placeholder="0.00" className="w-full mt-1 p-3 rounded-xl bg-gray-800 border border-gray-700 text-lg" />
+                  </div>
+
+                  <div className="flex gap-2">
+                    {[0.25, 0.5, 0.75, 1].map(pct => (
+                      <button key={pct} onClick={() => setPercentage(pct)}
+                        className="flex-1 py-2 rounded-lg bg-gray-800 text-sm">
+                        {pct * 100}%
+                      </button>
+                    ))}
+                  </div>
+
+                  {amount && price && (
+                    <div className="bg-gray-800 rounded-xl p-3 text-center">
+                      <p className="text-sm text-gray-400">الإجمالي</p>
+                      <p className="text-xl font-bold">${formatPrice(parseFloat(amount) * price)}</p>
+                    </div>
+                  )}
+
+                  <button onClick={executeTrade}
+                    className={`w-full py-4 rounded-xl font-bold text-lg ${
+                      orderType === 'buy' ? 'bg-green-600' : 'bg-red-600'
+                    }`}>
+                    {orderType === 'buy' ? '🟢 شراء' : '🔴 بيع'} {coin.name}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Portfolio Tab */}
+            {tab === 'portfolio' && (
+              <div className="space-y-3 animate-slideUp">
+                <div className="glass rounded-xl p-4 text-center">
+                  <p className="text-gray-400">💰 الرصيد النقدي</p>
+                  <p className="text-2xl font-bold text-green-400">{formatMoney(balance)}</p>
+                </div>
+
+                {Object.keys(portfolio).length === 0 ? (
+                  <div className="glass rounded-xl p-8 text-center text-gray-400">
+                    <p className="text-4xl mb-2">💼</p>
+                    <p>المحفظة فارغة</p>
+                    <p className="text-sm">ابدأ بشراء بعض العملات!</p>
+                  </div>
+                ) : (
+                  Object.entries(portfolio).map(([symbol, qty]) => {
+                    const coinInfo = COINS.find(c => c.symbol === symbol);
+                    const currentPrice = allPrices[symbol] || 0;
+                    const value = qty * currentPrice;
+                    const buys = trades.filter(t => t.coin === symbol && t.type === 'buy');
+                    const avgPrice = buys.reduce((sum, t) => sum + t.price * t.qty, 0) / buys.reduce((sum, t) => sum + t.qty, 0) || 0;
+                    const pnl = (currentPrice - avgPrice) * qty;
+                    const pnlPct = avgPrice > 0 ? ((currentPrice - avgPrice) / avgPrice) * 100 : 0;
+
+                    return (
+                      <div key={symbol} className={`glass rounded-xl p-4 border-r-4 ${pnl >= 0 ? 'border-green-500' : 'border-red-500'}`}>
+                        <div className="flex justify-between items-center">
+                          <div className="flex items-center gap-3">
+                            <span className="text-2xl">{coinInfo?.icon}</span>
+                            <div>
+                              <p className="font-bold">{coinInfo?.name}</p>
+                              <p className="text-sm text-gray-400">{qty.toFixed(6)} {symbol.replace('USDT', '')}</p>
+                            </div>
+                          </div>
+                          <div className="text-left">
+                            <p className="font-bold">{formatMoney(value)}</p>
+                            <p className={`text-sm ${pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                              {pnl >= 0 ? '+' : ''}{formatMoney(pnl)} ({pnlPct.toFixed(2)}%)
+                            </p>
+                          </div>
+                        </div>
+                        <div className="mt-2 flex gap-2">
+                          <button onClick={() => { setCoin(coinInfo); setOrderType('buy'); setTab('trade'); }}
+                            className="flex-1 py-2 rounded-lg bg-green-900/50 text-green-400 text-sm">+ شراء</button>
+                          <button onClick={() => { setCoin(coinInfo); setOrderType('sell'); setTab('trade'); }}
+                            className="flex-1 py-2 rounded-lg bg-red-900/50 text-red-400 text-sm">- بيع</button>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            )}
+
+            {/* History Tab */}
+            {tab === 'history' && (
+              <div className="space-y-3 animate-slideUp">
+                {/* Stats */}
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="glass rounded-xl p-3 text-center">
+                    <p className="text-xs text-gray-400">الصفقات</p>
+                    <p className="font-bold">{stats.totalTrades}</p>
+                  </div>
+                  <div className="glass rounded-xl p-3 text-center">
+                    <p className="text-xs text-gray-400">Win Rate</p>
+                    <p className="font-bold text-green-400">{stats.winRate.toFixed(0)}%</p>
+                  </div>
+                  <div className="glass rounded-xl p-3 text-center">
+                    <p className="text-xs text-gray-400">P&L المغلق</p>
+                    <p className={`font-bold ${stats.totalPnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                      {stats.totalPnL >= 0 ? '+' : ''}${stats.totalPnL.toFixed(2)}
+                    </p>
+                  </div>
+                </div>
+
+                {trades.length === 0 ? (
+                  <div className="glass rounded-xl p-8 text-center text-gray-400">
+                    <p className="text-4xl mb-2">📜</p>
+                    <p>لا توجد صفقات بعد</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2 max-h-96 overflow-y-auto no-scrollbar">
+                    {trades.slice().reverse().map(t => (
+                      <div key={t.id} className={`glass rounded-xl p-3 border-r-4 ${
+                        t.type === 'buy' ? 'border-green-500' : t.pnl >= 0 ? 'border-blue-500' : 'border-red-500'
+                      }`}>
+                        <div className="flex justify-between items-center">
+                          <div className="flex items-center gap-2">
+                            <span>{COINS.find(c => c.symbol === t.coin)?.icon}</span>
+                            <span className={`text-xs px-2 py-0.5 rounded ${t.type === 'buy' ? 'bg-green-900 text-green-400' : 'bg-red-900 text-red-400'}`}>
+                              {t.type === 'buy' ? 'شراء' : 'بيع'}
+                            </span>
+                          </div>
+                          <span className="text-xs text-gray-400">{formatDate(t.time)}</span>
+                        </div>
+                        <div className="mt-2 grid grid-cols-3 gap-2 text-sm">
+                          <div>
+                            <p className="text-xs text-gray-400">السعر</p>
+                            <p>${formatPrice(t.price)}</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-gray-400">الكمية</p>
+                            <p>{t.qty.toFixed(6)}</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-gray-400">{t.type === 'sell' ? 'P&L' : 'الإجمالي'}</p>
+                            <p className={t.type === 'sell' ? (t.pnl >= 0 ? 'text-green-400' : 'text-red-400') : ''}>
+                              {t.type === 'sell' ? `${t.pnl >= 0 ? '+' : ''}$${t.pnl.toFixed(2)}` : `$${t.total.toFixed(2)}`}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Analysis Tab */}
+            {tab === 'analysis' && (
+              <div className="space-y-4 animate-slideUp">
+                <CoinSelector coins={COINS} selected={coin} onChange={setCoin} />
+
+                {loading ? (
+                  <div className="flex justify-center py-10">
+                    <div className="w-12 h-12 border-4 border-amber-500 border-t-transparent rounded-full animate-spin" />
+                  </div>
+                ) : aqScore && (
+                  <>
+                    <div className={`rounded-2xl p-4 bg-gradient-to-br ${aqScore.color} text-center`}>
+                      <p className="text-2xl font-bold">{aqScore.recommendation}</p>
+                      <p className="text-sm opacity-80">{aqScore.passedTests}/12 اختبار ناجح | {aqScore.percentage.toFixed(0)}%</p>
+                    </div>
+
+                    <div className="space-y-2 max-h-80 overflow-y-auto no-scrollbar">
+                      {aqScore.tests.map(test => <TestCard key={test.id} test={test} />)}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // 📱 MAIN APP PAGES
+    // ═══════════════════════════════════════════════════════════════
+    
+    function TabBar({ active, onChange }) {
+      const tabs = [
+        { id: 'home', icon: '🏠', label: 'الرئيسية' },
+        { id: 'compare', icon: '📊', label: 'مقارنة' },
+        { id: 'calc', icon: '🧮', label: 'حاسبة' },
+        { id: 'alerts', icon: '🔔', label: 'تنبيهات' },
+        { id: 'journal', icon: '📓', label: 'الصفقات' },
+      ];
+      return (
+        <div className="fixed bottom-0 left-0 right-0 glass-strong border-t border-white/10 z-50" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
+          <div className="flex justify-around py-2">
+            {tabs.map(t => (
+              <button key={t.id} onClick={() => onChange(t.id)}
+                className={`flex flex-col items-center px-3 py-1 rounded-xl ${active === t.id ? 'text-indigo-400' : 'text-gray-500'}`}>
+                <span className="text-xl">{t.icon}</span>
+                <span className="text-xs mt-1">{t.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    function HomePage({ coin, setCoin, onGoDemo }) {
+      const { data, price, loading } = useMarketData(coin.symbol);
+      const derivData = useDerivativesData(coin.symbol);
+      const aqScore = useMemo(() => calculateAQScore(data, price, derivData), [data, price, derivData]);
+      const [tab, setTab] = useState('score');
+
+      if (loading) return (
+        <div className="flex justify-center items-center h-64">
+          <div className="w-16 h-16 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+        </div>
+      );
+
+      return (
+        <div className="space-y-4 animate-slideUp">
+          <CoinSelector coins={COINS} selected={coin} onChange={setCoin} />
+          
+          {/* Demo Button */}
+          <button onClick={onGoDemo}
+            className="w-full py-3 rounded-xl demo-badge font-bold text-lg flex items-center justify-center gap-2">
+            <span>🎓</span>
+            <span>الانتقال لصفحة التدريب</span>
+            <span>→</span>
+          </button>
+
+          {/* Price Card */}
+          <div className="glass rounded-2xl p-4">
+            <div className="flex justify-between items-center">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-3xl">{coin.icon}</span>
+                  <div>
+                    <p className="font-bold">{coin.name}</p>
+                    <p className="text-xs text-gray-400">{coin.symbol}</p>
+                  </div>
+                </div>
+                <p className="text-2xl font-bold mt-2">${formatPrice(price)}</p>
+              </div>
+              {aqScore && <ScoreRing score={aqScore.percentage} max={100} size="lg" />}
+            </div>
+            {aqScore && (
+              <div className={`mt-4 p-3 rounded-xl bg-gradient-to-r ${aqScore.color} text-center`}>
+                <p className="text-xl font-bold">{aqScore.recommendation}</p>
+                <p className="text-sm opacity-80">{aqScore.passedTests}/12 اختبار ناجح</p>
+              </div>
+            )}
+          </div>
+
+          {/* Tabs */}
+          <div className="flex gap-2">
+            {[{ id: 'score', label: '🎯 النتيجة' }, { id: 'tests', label: '📋 الاختبارات' }, { id: 'deriv', label: '📈 المشتقات' }].map(t => (
+              <button key={t.id} onClick={() => setTab(t.id)}
+                className={`flex-1 py-2 rounded-xl text-sm ${tab === t.id ? 'bg-indigo-600' : 'glass'}`}>
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          {tab === 'score' && aqScore && (
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                {[
+                  { label: 'RSI', value: aqScore.indicators.rsi?.toFixed(1), color: aqScore.indicators.rsi < 30 ? 'text-green-400' : aqScore.indicators.rsi > 70 ? 'text-red-400' : 'text-yellow-400' },
+                  { label: 'EMA20', value: '$' + formatPrice(aqScore.indicators.ema20), color: price > aqScore.indicators.ema20 ? 'text-green-400' : 'text-red-400' },
+                  { label: 'ATR', value: formatPrice(aqScore.indicators.atr), color: 'text-purple-400' },
+                  { label: 'VWAP', value: '$' + formatPrice(aqScore.indicators.vwap), color: price > aqScore.indicators.vwap ? 'text-green-400' : 'text-red-400' },
+                ].map((ind, i) => (
+                  <div key={i} className="glass rounded-xl p-3 text-center">
+                    <p className="text-xs text-gray-400">{ind.label}</p>
+                    <p className={`font-bold ${ind.color}`}>{ind.value}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {tab === 'tests' && aqScore && (
+            <div className="space-y-2 max-h-80 overflow-y-auto no-scrollbar">
+              {aqScore.tests.map(test => <TestCard key={test.id} test={test} />)}
+            </div>
+          )}
+
+          {tab === 'deriv' && derivData && (
+            <div className="space-y-3">
+              <div className="glass rounded-xl p-4 text-center">
+                <p className="text-gray-400 text-sm">Funding Rate</p>
+                <p className={`text-2xl font-bold ${derivData.fundingRate < 0 ? 'text-green-400' : 'text-red-400'}`}>
+                  {derivData.fundingRate.toFixed(4)}%
+                </p>
+              </div>
+              <div className="glass rounded-xl p-4">
+                <p className="text-gray-400 text-sm text-center mb-2">Long / Short</p>
+                <div className="flex h-6 rounded-full overflow-hidden">
+                  <div className="bg-green-500 flex items-center justify-center text-xs font-bold" style={{ width: `${derivData.longAccount}%` }}>
+                    {derivData.longAccount.toFixed(0)}%
+                  </div>
+                  <div className="bg-red-500 flex items-center justify-center text-xs font-bold" style={{ width: `${derivData.shortAccount}%` }}>
+                    {derivData.shortAccount.toFixed(0)}%
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function ComparePage() {
+      const [results, setResults] = useState([]);
+      const [loading, setLoading] = useState(true);
+
+      useEffect(() => {
+        const scanAll = async () => {
+          const newResults = [];
+          for (const coin of COINS) {
+            try {
+              const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${coin.symbol}&interval=4h&limit=100`);
+              const klines = await res.json();
+              const data = klines.map(c => ({ time: c[0], open: parseFloat(c[1]), high: parseFloat(c[2]), low: parseFloat(c[3]), close: parseFloat(c[4]), volume: parseFloat(c[5]) }));
+              const price = data[data.length - 1].close;
+              const aq = calculateAQScore(data, price, null);
+              newResults.push({ ...coin, price, aq });
+            } catch {}
+          }
+          newResults.sort((a, b) => (b.aq?.percentage || 0) - (a.aq?.percentage || 0));
+          setResults(newResults);
+          setLoading(false);
+        };
+        scanAll();
+        const interval = setInterval(scanAll, 60000);
+        return () => clearInterval(interval);
+      }, []);
+
+      if (loading) return <div className="flex justify-center py-10"><div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" /></div>;
+
+      return (
+        <div className="space-y-3 animate-slideUp">
+          <h2 className="text-xl font-bold text-center">📊 مقارنة العملات</h2>
+          {results.map((r, i) => (
+            <div key={r.symbol} className={`glass rounded-xl p-4 ${i === 0 && r.aq?.percentage >= 60 ? 'ring-2 ring-green-500' : ''}`}>
+              <div className="flex justify-between items-center">
+                <div className="flex items-center gap-3">
+                  <span className="text-2xl">{r.icon}</span>
+                  <div>
+                    <p className="font-bold">{r.name}</p>
+                    <p className="text-sm text-gray-400">${formatPrice(r.price)}</p>
+                  </div>
+                </div>
+                <div className="text-left">
+                  <div className={`text-xl font-bold ${r.aq?.percentage >= 60 ? 'text-green-400' : r.aq?.percentage >= 45 ? 'text-yellow-400' : 'text-red-400'}`}>
+                    {r.aq?.percentage.toFixed(0)}%
+                  </div>
+                  <p className="text-xs">{r.aq?.passedTests}/12</p>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    function CalculatorPage() {
+      const [capital, setCapital] = useState('1000');
+      const [risk, setRisk] = useState('2');
+      const [entry, setEntry] = useState('');
+      const [stopLoss, setStopLoss] = useState('');
+      const [result, setResult] = useState(null);
+
+      useEffect(() => {
+        const cap = parseFloat(capital), riskPct = parseFloat(risk), entryPrice = parseFloat(entry), sl = parseFloat(stopLoss);
+        if (!cap || !riskPct || !entryPrice || !sl) return setResult(null);
+        const riskAmount = cap * (riskPct / 100);
+        const slDistance = Math.abs(entryPrice - sl);
+        const positionSize = riskAmount / slDistance;
+        const positionValue = positionSize * entryPrice;
+        setResult({ riskAmount, positionSize, positionValue, tp1: entryPrice + slDistance * 1.5, tp2: entryPrice + slDistance * 2, tp3: entryPrice + slDistance * 3 });
+      }, [capital, risk, entry, stopLoss]);
+
+      return (
+        <div className="space-y-4 animate-slideUp">
+          <h2 className="text-xl font-bold text-center">🧮 حاسبة الصفقة</h2>
+          <div className="glass rounded-xl p-4 space-y-4">
+            <div>
+              <label className="text-sm text-gray-400">💰 رأس المال</label>
+              <input type="number" value={capital} onChange={e => setCapital(e.target.value)} className="w-full mt-1 p-3 rounded-xl bg-gray-800 border border-gray-700" />
+            </div>
+            <div>
+              <label className="text-sm text-gray-400">⚠️ المخاطرة %</label>
+              <div className="flex gap-2 mt-1">
+                {['1', '2', '3', '5'].map(r => (
+                  <button key={r} onClick={() => setRisk(r)} className={`flex-1 py-2 rounded-xl ${risk === r ? 'bg-indigo-600' : 'bg-gray-800'}`}>{r}%</button>
+                ))}
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-sm text-gray-400">📍 الدخول</label>
+                <input type="number" value={entry} onChange={e => setEntry(e.target.value)} className="w-full mt-1 p-3 rounded-xl bg-gray-800 border border-gray-700" placeholder="50000" />
+              </div>
+              <div>
+                <label className="text-sm text-gray-400">🛑 SL</label>
+                <input type="number" value={stopLoss} onChange={e => setStopLoss(e.target.value)} className="w-full mt-1 p-3 rounded-xl bg-gray-800 border border-gray-700" placeholder="49000" />
+              </div>
+            </div>
+          </div>
+          {result && (
+            <div className="glass rounded-xl p-4 space-y-3 animate-slideUp">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-indigo-900/30 rounded-xl p-3 text-center">
+                  <p className="text-xs text-gray-400">حجم الصفقة</p>
+                  <p className="font-bold">{result.positionSize.toFixed(6)}</p>
+                </div>
+                <div className="bg-red-900/30 rounded-xl p-3 text-center">
+                  <p className="text-xs text-gray-400">المخاطرة</p>
+                  <p className="font-bold text-red-400">${result.riskAmount.toFixed(2)}</p>
+                </div>
+              </div>
+              <div className="space-y-2">
+                {[{ l: 'TP1', p: result.tp1 }, { l: 'TP2', p: result.tp2 }, { l: 'TP3', p: result.tp3 }].map(tp => (
+                  <div key={tp.l} className="flex justify-between p-2 bg-green-900/20 rounded-lg">
+                    <span>{tp.l}</span>
+                    <span className="text-green-400">${formatPrice(tp.p)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function AlertsPage() {
+      const [alerts, setAlerts] = useLocalStorage('aq_alerts', []);
+      const [priceAlerts, setPriceAlerts] = useLocalStorage('aq_price_alerts', []);
+      const [newAlert, setNewAlert] = useState({ coin: 'BTCUSDT', price: '', type: 'above' });
+
+      const addAlert = () => {
+        if (!newAlert.price) return;
+        setPriceAlerts([...priceAlerts, { ...newAlert, id: Date.now() }]);
+        setNewAlert({ ...newAlert, price: '' });
+      };
+
+      return (
+        <div className="space-y-4 animate-slideUp">
+          <h2 className="text-xl font-bold text-center">🔔 التنبيهات</h2>
+          <div className="glass rounded-xl p-4">
+            <p className="text-sm text-gray-400 mb-3">➕ تنبيه سعر جديد</p>
+            <div className="flex gap-2 mb-3">
+              <select value={newAlert.coin} onChange={e => setNewAlert({ ...newAlert, coin: e.target.value })} className="flex-1 p-2 rounded-xl bg-gray-800">
+                {COINS.map(c => <option key={c.symbol} value={c.symbol}>{c.name}</option>)}
+              </select>
+              <select value={newAlert.type} onChange={e => setNewAlert({ ...newAlert, type: e.target.value })} className="p-2 rounded-xl bg-gray-800">
+                <option value="above">فوق ▲</option>
+                <option value="below">تحت ▼</option>
+              </select>
+            </div>
+            <div className="flex gap-2">
+              <input type="number" value={newAlert.price} onChange={e => setNewAlert({ ...newAlert, price: e.target.value })} placeholder="السعر" className="flex-1 p-2 rounded-xl bg-gray-800" />
+              <button onClick={addAlert} className="px-4 py-2 bg-indigo-600 rounded-xl">إضافة</button>
+            </div>
+          </div>
+          {priceAlerts.length > 0 && (
+            <div className="glass rounded-xl p-4 space-y-2">
+              {priceAlerts.map(a => (
+                <div key={a.id} className="flex justify-between items-center p-2 bg-gray-800 rounded-lg">
+                  <span>{COINS.find(c => c.symbol === a.coin)?.icon} {a.coin.replace('USDT', '')}</span>
+                  <span className={a.type === 'above' ? 'text-green-400' : 'text-red-400'}>{a.type === 'above' ? '▲' : '▼'} ${a.price}</span>
+                  <button onClick={() => setPriceAlerts(priceAlerts.filter(x => x.id !== a.id))} className="text-red-400">✕</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function JournalPage() {
+      const [trades, setTrades] = useLocalStorage('aq_real_trades', []);
+      const [showForm, setShowForm] = useState(false);
+      const [newTrade, setNewTrade] = useState({ coin: 'BTCUSDT', type: 'buy', entry: '', exit: '', amount: '' });
+
+      const addTrade = () => {
+        if (!newTrade.entry || !newTrade.amount) return;
+        const entry = parseFloat(newTrade.entry), exit = newTrade.exit ? parseFloat(newTrade.exit) : null, amount = parseFloat(newTrade.amount);
+        const pnl = exit ? (newTrade.type === 'buy' ? (exit - entry) * amount : (entry - exit) * amount) : null;
+        setTrades([...trades, { ...newTrade, id: Date.now(), entry, exit, amount, pnl, status: exit ? 'closed' : 'open' }]);
+        setNewTrade({ coin: 'BTCUSDT', type: 'buy', entry: '', exit: '', amount: '' });
+        setShowForm(false);
+      };
+
+      const stats = useMemo(() => {
+        const closed = trades.filter(t => t.status === 'closed');
+        const wins = closed.filter(t => t.pnl > 0);
+        return { total: trades.length, winRate: closed.length > 0 ? (wins.length / closed.length) * 100 : 0, totalPnL: closed.reduce((s, t) => s + (t.pnl || 0), 0) };
+      }, [trades]);
+
+      return (
+        <div className="space-y-4 animate-slideUp">
+          <div className="flex justify-between items-center">
+            <h2 className="text-xl font-bold">📓 الصفقات الحقيقية</h2>
+            <button onClick={() => setShowForm(!showForm)} className="px-4 py-2 bg-indigo-600 rounded-xl text-sm">{showForm ? '✕' : '+'}</button>
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <div className="glass rounded-xl p-2 text-center"><p className="text-xs text-gray-400">الكل</p><p className="font-bold">{stats.total}</p></div>
+            <div className="glass rounded-xl p-2 text-center"><p className="text-xs text-gray-400">Win%</p><p className="font-bold text-green-400">{stats.winRate.toFixed(0)}%</p></div>
+            <div className="glass rounded-xl p-2 text-center"><p className="text-xs text-gray-400">P&L</p><p className={`font-bold ${stats.totalPnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>${stats.totalPnL.toFixed(2)}</p></div>
+          </div>
+          {showForm && (
+            <div className="glass rounded-xl p-4 space-y-3 animate-slideUp">
+              <div className="grid grid-cols-2 gap-3">
+                <select value={newTrade.coin} onChange={e => setNewTrade({ ...newTrade, coin: e.target.value })} className="p-2 rounded-xl bg-gray-800">
+                  {COINS.map(c => <option key={c.symbol} value={c.symbol}>{c.name}</option>)}
+                </select>
+                <select value={newTrade.type} onChange={e => setNewTrade({ ...newTrade, type: e.target.value })} className="p-2 rounded-xl bg-gray-800">
+                  <option value="buy">شراء</option><option value="sell">بيع</option>
+                </select>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <input type="number" value={newTrade.entry} onChange={e => setNewTrade({ ...newTrade, entry: e.target.value })} placeholder="الدخول" className="p-2 rounded-xl bg-gray-800" />
+                <input type="number" value={newTrade.amount} onChange={e => setNewTrade({ ...newTrade, amount: e.target.value })} placeholder="الكمية" className="p-2 rounded-xl bg-gray-800" />
+              </div>
+              <input type="number" value={newTrade.exit} onChange={e => setNewTrade({ ...newTrade, exit: e.target.value })} placeholder="الخروج (اختياري)" className="w-full p-2 rounded-xl bg-gray-800" />
+              <button onClick={addTrade} className="w-full py-2 bg-green-600 rounded-xl font-bold">حفظ</button>
+            </div>
+          )}
+          {trades.length === 0 ? (
+            <div className="glass rounded-xl p-8 text-center text-gray-400"><p className="text-4xl mb-2">📓</p><p>لا توجد صفقات</p></div>
+          ) : (
+            <div className="space-y-2">
+              {trades.slice().reverse().map(t => (
+                <div key={t.id} className={`glass rounded-xl p-3 border-r-4 ${t.status === 'open' ? 'border-yellow-500' : t.pnl >= 0 ? 'border-green-500' : 'border-red-500'}`}>
+                  <div className="flex justify-between items-center">
+                    <div className="flex items-center gap-2">
+                      <span>{COINS.find(c => c.symbol === t.coin)?.icon}</span>
+                      <span className={`text-xs px-2 py-0.5 rounded ${t.type === 'buy' ? 'bg-green-900 text-green-400' : 'bg-red-900 text-red-400'}`}>{t.type === 'buy' ? 'شراء' : 'بيع'}</span>
+                    </div>
+                    <button onClick={() => setTrades(trades.filter(x => x.id !== t.id))} className="text-red-400">🗑️</button>
+                  </div>
+                  <div className="mt-2 grid grid-cols-3 gap-2 text-sm">
+                    <div><p className="text-xs text-gray-400">دخول</p><p>${formatPrice(t.entry)}</p></div>
+                    <div><p className="text-xs text-gray-400">خروج</p><p>{t.exit ? `$${formatPrice(t.exit)}` : '-'}</p></div>
+                    <div><p className="text-xs text-gray-400">P&L</p><p className={t.pnl >= 0 ? 'text-green-400' : 'text-red-400'}>{t.pnl ? `${t.pnl >= 0 ? '+' : ''}$${t.pnl.toFixed(2)}` : '-'}</p></div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // 🚀 MAIN APP
+    // ═══════════════════════════════════════════════════════════════
+    
+    function App() {
+      const [mode, setMode] = useState('main'); // 'main' or 'demo'
+      const [page, setPage] = useState('home');
+      const [coin, setCoin] = useState(COINS[0]);
+
+      if (mode === 'demo') {
+        return <DemoTradingPage onBack={() => setMode('main')} />;
+      }
+
+      return (
+        <div className="min-h-screen bg-[#0a0a0f] text-white pb-24">
+          {/* Header */}
+          <div className="bg-gradient-to-r from-indigo-900 via-purple-900 to-fuchsia-900 p-4 sticky top-0 z-30">
+            <div className="flex justify-between items-center">
+              <div>
+                <h1 className="text-xl font-bold">⚡ AQ Pro</h1>
+                <p className="text-xs text-purple-200">المنصة الشاملة</p>
+              </div>
+              <div className="live-badge px-3 py-1 rounded-full text-xs font-bold">
+                LIVE
+              </div>
+            </div>
+          </div>
+
+          {/* Content */}
+          <div className="p-4">
+            {page === 'home' && <HomePage coin={coin} setCoin={setCoin} onGoDemo={() => setMode('demo')} />}
+            {page === 'compare' && <ComparePage />}
+            {page === 'calc' && <CalculatorPage />}
+            {page === 'alerts' && <AlertsPage />}
+            {page === 'journal' && <JournalPage />}
+          </div>
+
+          {/* Tab Bar */}
+          <TabBar active={page} onChange={setPage} />
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
+  </script>
+</body>
+</html>
