@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>AQ Pro - التحليل الذكي</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+  <style>
+    body { margin: 0; padding: 0; background: #0a0a0f; font-family: system-ui; color: white; }
+    .glass { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); }
+    .ai-gradient { background: linear-gradient(135deg, #6366f1, #8b5cf6); }
+    .hide-scroll::-webkit-scrollbar { display: none; }
+    .hide-scroll { -ms-overflow-style: none; scrollbar-width: none; }
+    input[type="number"] { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; padding: 8px; color: white; width: 60px; font-size: 14px; text-align: center; }
+    input[type="number"]:focus { outline: none; border-color: #8b5cf6; }
+    .toggle-btn.active { background: linear-gradient(135deg, #22c55e, #16a34a); }
+    .collapse-content { max-height: 0; overflow: hidden; transition: max-height 0.3s; }
+    .collapse-content.open { max-height: 500px; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  
+  <script>
+    let currentPage = 'analysis';
+    let currentCoin = 'BTCUSDT';
+    let currentPeriod = '1d';
+    let chartData = [];
+    let currentPrice = 0;
+    let priceChange = 0;
+    let mainChart = null, rsiChart = null, macdChart = null, stochChart = null;
+    let newsData = [];
+    let fearGreedData = null;
+    let indicators = {};
+    let calcAmount = 100;
+    let calcPeriod = '1d';
+    let newsFilter = 'all';
+    let newsLoading = false;
+    let expandedTools = {};
+
+    // إعدادات الأدوات التفصيلية
+    let toolSettings = {
+      ema: { enabled: true, periods: { 9: true, 20: true, 50: true, 100: false, 200: true } },
+      rsi: { enabled: true, period: 14, oversold: 30, overbought: 70 },
+      macd: { enabled: true, fast: 12, slow: 26, signal: 9 },
+      bollinger: { enabled: false, period: 20, deviation: 2 },
+      vwap: { enabled: false },
+      stochastic: { enabled: false, kPeriod: 14, dPeriod: 3, oversold: 20, overbought: 80 },
+      adx: { enabled: false, period: 14 },
+      fibonacci: { enabled: false },
+      atr: { enabled: false, period: 14 },
+      support: { enabled: false }
+    };
+
+    const coins = [
+      { symbol: 'BTCUSDT', name: 'بيتكوين', icon: '₿' },
+      { symbol: 'ETHUSDT', name: 'إيثيريوم', icon: 'Ξ' },
+      { symbol: 'BNBUSDT', name: 'BNB', icon: '◈' },
+      { symbol: 'SOLUSDT', name: 'سولانا', icon: '◎' },
+      { symbol: 'XRPUSDT', name: 'ريبل', icon: '✕' }
+    ];
+
+    const periods = [
+      { id: '1d', label: 'يوم', interval: '15m', limit: 96 },
+      { id: '1w', label: 'أسبوع', interval: '1h', limit: 168 },
+      { id: '1m', label: 'شهر', interval: '4h', limit: 180 },
+      { id: '3m', label: '3 شهور', interval: '1d', limit: 90 },
+      { id: '1y', label: 'سنة', interval: '1d', limit: 365 }
+    ];
+
+    const calcPeriods = [
+      { id: '1h', label: 'ساعة', hours: 1 },
+      { id: '2h', label: 'ساعتين', hours: 2 },
+      { id: '1d', label: 'يوم', hours: 24 },
+      { id: '1w', label: 'أسبوع', hours: 168 }
+    ];
+
+    // دوال الحساب
+    function calcEMA(data, period) {
+      if (!data || data.length < period) return [];
+      const result = [];
+      const mult = 2 / (period + 1);
+      let ema = data.slice(0, period).reduce((a, b) => a + b.close, 0) / period;
+      for (let i = 0; i < data.length; i++) {
+        if (i < period - 1) result.push(null);
+        else if (i === period - 1) result.push(ema);
+        else { ema = (data[i].close - ema) * mult + ema; result.push(ema); }
+      }
+      return result;
+    }
+
+    function calcRSI(data, period) {
+      if (!data || data.length < period + 1) return [];
+      const result = [null];
+      for (let i = 1; i < data.length; i++) {
+        if (i < period) { result.push(null); continue; }
+        let gains = 0, losses = 0;
+        for (let j = i - period + 1; j <= i; j++) {
+          const change = data[j].close - data[j-1].close;
+          if (change > 0) gains += change; else losses -= change;
+        }
+        result.push(losses === 0 ? 100 : 100 - (100 / (1 + (gains/period) / (losses/period))));
+      }
+      return result;
+    }
+
+    function calcMACD(data, fast, slow, signal) {
+      const emaFast = calcEMA(data, fast);
+      const emaSlow = calcEMA(data, slow);
+      const macdLine = emaFast.map((v, i) => (v && emaSlow[i]) ? v - emaSlow[i] : null);
+      const macdData = data.map((d, i) => ({ close: macdLine[i] || 0 }));
+      const signalLine = calcEMA(macdData, signal);
+      const histogram = macdLine.map((v, i) => (v && signalLine[i]) ? v - signalLine[i] : null);
+      return { macdLine, signalLine, histogram };
+    }
+
+    function calcBollinger(data, period, deviation) {
+      const sma = data.map((d, i) => i < period - 1 ? null : data.slice(i - period + 1, i + 1).reduce((a, b) => a + b.close, 0) / period);
+      const upper = [], lower = [];
+      for (let i = 0; i < data.length; i++) {
+        if (!sma[i]) { upper.push(null); lower.push(null); continue; }
+        const slice = data.slice(Math.max(0, i - period + 1), i + 1).map(d => d.close);
+        const std = Math.sqrt(slice.reduce((sum, val) => sum + Math.pow(val - sma[i], 2), 0) / slice.length);
+        upper.push(sma[i] + deviation * std); lower.push(sma[i] - deviation * std);
+      }
+      return { sma, upper, lower };
+    }
+
+    function calcVWAP(data) {
+      let cumVol = 0, cumVolPrice = 0;
+      return data.map(d => { cumVol += d.volume || 1; cumVolPrice += ((d.high + d.low + d.close) / 3) * (d.volume || 1); return cumVol > 0 ? cumVolPrice / cumVol : null; });
+    }
+
+    function calcStochastic(data, kPeriod, dPeriod) {
+      const k = data.map((d, i) => {
+        if (i < kPeriod - 1) return null;
+        const slice = data.slice(i - kPeriod + 1, i + 1);
+        const high = Math.max(...slice.map(x => x.high)); const low = Math.min(...slice.map(x => x.low));
+        return high === low ? 50 : ((d.close - low) / (high - low)) * 100;
+      });
+      const dV = k.map((v, i) => { if (i < kPeriod + dPeriod - 2) return null; const slice = k.slice(i - dPeriod + 1, i + 1).filter(x => x !== null); return slice.length ? slice.reduce((a, b) => a + b, 0) / slice.length : null; });
+      return { k, d: dV };
+    }
+
+    function calcATR(data, period) {
+      return data.map((d, i) => { if (i < period) return null; let sum = 0; for (let j = i - period + 1; j <= i; j++) { const tr = j === 0 ? d.high - d.low : Math.max(data[j].high - data[j].low, Math.abs(data[j].high - data[j-1].close), Math.abs(data[j].low - data[j-1].close)); sum += tr; } return sum / period; });
+    }
+
+    function formatPrice(p) { if (!p || isNaN(p)) return '-'; return p >= 1000 ? '$' + p.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '$' + p.toFixed(4); }
+    function formatUSD(p) { return !p || isNaN(p) ? '-' : '$' + p.toFixed(2); }
+
+    function calculateIndicators() {
+      if (!chartData.length) return;
+      const last = chartData.length - 1;
+      const s = toolSettings;
+      const emaData = {};
+      [9, 20, 50, 100, 200].forEach(p => { if (s.ema.periods[p]) emaData[p] = calcEMA(chartData, p); });
+      const rsi = calcRSI(chartData, s.rsi.period);
+      const macd = calcMACD(chartData, s.macd.fast, s.macd.slow, s.macd.signal);
+      const bollinger = calcBollinger(chartData, s.bollinger.period, s.bollinger.deviation);
+      const vwap = calcVWAP(chartData);
+      const stoch = calcStochastic(chartData, s.stochastic.kPeriod, s.stochastic.dPeriod);
+      const atr = calcATR(chartData, s.atr.period);
+      indicators = { emaData, rsi: rsi[last], rsiData: rsi, macdHist: macd.histogram[last], macdData: macd, bbUpper: bollinger.upper[last], bbLower: bollinger.lower[last], bollingerData: bollinger, vwap: vwap[last], vwapData: vwap, stochK: stoch.k[last], stochD: stoch.d[last], stochData: stoch, atr: atr[last], atrPercent: atr[last] ? (atr[last] / currentPrice) * 100 : 0, atrData: atr };
+    }
+
+    function doSmartAnalysis() {
+      let bullish = 0, bearish = 0; const analysis = []; const comparison = []; const s = toolSettings;
+      if (s.ema.enabled && indicators.emaData) {
+        let above = 0, total = 0;
+        Object.entries(s.ema.periods).forEach(([p, en]) => { if (en && indicators.emaData[p]) { total++; if (currentPrice > indicators.emaData[p][chartData.length - 1]) above++; } });
+        if (total > 0) { const r = above / total; if (r >= 0.6) { bullish += 2; analysis.push(`EMA: فوق ${above}/${total}`); } else { bearish += 2; analysis.push(`EMA: تحت ${above}/${total}`); } comparison.push({ tool: 'EMA', result: `${above}/${total}`, good: r >= 0.5 }); }
+      }
+      if (s.rsi.enabled && indicators.rsi) {
+        if (indicators.rsi < s.rsi.oversold) { bullish += 2; analysis.push(`RSI(${s.rsi.period}): مشبع بيع`); }
+        else if (indicators.rsi > s.rsi.overbought) { bearish += 2; analysis.push(`RSI(${s.rsi.period}): مشبع شراء`); }
+        comparison.push({ tool: `RSI(${s.rsi.period})`, result: indicators.rsi.toFixed(0), good: indicators.rsi < s.rsi.overbought });
+      }
+      if (s.macd.enabled && indicators.macdHist !== null) {
+        if (indicators.macdHist > 0) { bullish += 2; analysis.push('MACD: إيجابي'); } else { bearish += 2; analysis.push('MACD: سلبي'); }
+        comparison.push({ tool: 'MACD', result: indicators.macdHist > 0 ? '▲' : '▼', good: indicators.macdHist > 0 });
+      }
+      if (s.bollinger.enabled && indicators.bbUpper) {
+        if (currentPrice < indicators.bbLower) bullish += 1.5; else if (currentPrice > indicators.bbUpper) bearish += 1.5;
+        comparison.push({ tool: 'بولنجر', result: currentPrice < indicators.bbLower ? 'تحت' : currentPrice > indicators.bbUpper ? 'فوق' : 'داخل', good: currentPrice <= indicators.bbUpper });
+      }
+      if (s.stochastic.enabled && indicators.stochK) {
+        if (indicators.stochK < s.stochastic.oversold) bullish += 1.5; else if (indicators.stochK > s.stochastic.overbought) bearish += 1.5;
+        comparison.push({ tool: 'Stoch', result: `K:${indicators.stochK.toFixed(0)}`, good: indicators.stochK < s.stochastic.overbought });
+      }
+      if (s.vwap.enabled && indicators.vwap) { if (currentPrice > indicators.vwap) bullish += 1; comparison.push({ tool: 'VWAP', result: currentPrice > indicators.vwap ? '⬆️' : '⬇️', good: currentPrice > indicators.vwap }); }
+      if (s.atr.enabled && indicators.atr) comparison.push({ tool: 'ATR', result: `${indicators.atrPercent.toFixed(1)}%`, good: indicators.atrPercent < 5 });
+      if (fearGreedData) { if (fearGreedData.value < 25) { bullish += 1; analysis.push('خوف شديد = فرصة'); } else if (fearGreedData.value > 75) { bearish += 1; analysis.push('طمع شديد'); } }
+      const score = bullish - bearish;
+      let decision, emoji, bgColor;
+      if (score >= 4) { decision = 'شراء قوي'; emoji = '🚀'; bgColor = 'from-green-600 to-emerald-700'; }
+      else if (score >= 2) { decision = 'شراء'; emoji = '🟢'; bgColor = 'from-green-700 to-green-800'; }
+      else if (score >= -1) { decision = 'انتظار'; emoji = '🟡'; bgColor = 'from-yellow-600 to-amber-700'; }
+      else if (score >= -3) { decision = 'تراجع'; emoji = '🟠'; bgColor = 'from-orange-600 to-orange-700'; }
+      else { decision = 'ابتعد'; emoji = '🔴'; bgColor = 'from-red-600 to-red-700'; }
+      const confidence = Math.min(95, 50 + Math.abs(score) * 8);
+      const atr = indicators.atr || currentPrice * 0.02;
+      let warnings = [];
+      if (indicators.rsi > s.rsi.overbought) warnings.push(`RSI > ${s.rsi.overbought}`);
+      if (indicators.atrPercent > 5) warnings.push('تقلب عالي');
+      return { decision, emoji, bgColor, confidence, analysis: analysis.join(' | '), comparison, bullish, bearish, score, entry: currentPrice, stopLoss: currentPrice - atr * 2, target1: currentPrice + atr * 2, target2: currentPrice + atr * 4, warnings: warnings.join(' • ') };
+    }
+
+    function calculatePrediction(amount, periodId) {
+      const period = calcPeriods.find(p => p.id === periodId);
+      if (!period || !indicators.atr || !currentPrice) return null;
+      const analysis = doSmartAnalysis();
+      const hourlyVol = (indicators.atrPercent || 2) / 24;
+      const vol = hourlyVol * Math.sqrt(period.hours);
+      let trend = 0;
+      if (analysis.score >= 4) trend = 0.7; else if (analysis.score >= 2) trend = 0.4; else if (analysis.score >= -1) trend = 0; else if (analysis.score >= -3) trend = -0.4; else trend = -0.7;
+      const opt = vol * (1 + trend), pess = -vol * (1 - trend), real = vol * trend * 0.5;
+      return { optimistic: { value: amount * (1 + opt / 100), change: opt }, pessimistic: { value: amount * (1 + pess / 100), change: pess }, realistic: { value: amount * (1 + real / 100), change: real } };
+    }
+
+    function render() {
+      const coin = coins.find(c => c.symbol === currentCoin);
+      const period = periods.find(p => p.id === currentPeriod);
+      document.getElementById('app').innerHTML = `
+        <div class="min-h-screen pb-20">
+          <div class="ai-gradient p-4">
+            <div class="flex justify-between items-center">
+              <div><h1 class="text-xl font-bold">⚡ AQ Pro</h1><p class="text-xs opacity-80">التحليل الذكي</p></div>
+              <div class="flex items-center gap-2"><span class="text-2xl">🤖</span><span class="px-2 py-1 rounded-full text-xs bg-white/20">AI</span></div>
+            </div>
+          </div>
+          ${currentPage === 'analysis' ? renderAnalysisPage(coin, period) : ''}
+          ${currentPage === 'tools' ? renderToolsPage() : ''}
+          ${currentPage === 'ai' ? renderAIPage() : ''}
+          ${currentPage === 'news' ? renderNewsPage() : ''}
+          <div class="fixed bottom-0 left-0 right-0 bg-[#0a0a0f]/95 backdrop-blur border-t border-white/10 px-2 py-2 z-50">
+            <div class="flex justify-around max-w-md mx-auto">
+              <button onclick="switchPage('analysis')" class="flex flex-col items-center gap-1 px-3 py-1.5 rounded-xl ${currentPage === 'analysis' ? 'ai-gradient' : ''}"><span class="text-lg">📊</span><span class="text-xs">الشارت</span></button>
+              <button onclick="switchPage('tools')" class="flex flex-col items-center gap-1 px-3 py-1.5 rounded-xl ${currentPage === 'tools' ? 'ai-gradient' : ''}"><span class="text-lg">🔧</span><span class="text-xs">الأدوات</span></button>
+              <button onclick="switchPage('ai')" class="flex flex-col items-center gap-1 px-3 py-1.5 rounded-xl ${currentPage === 'ai' ? 'ai-gradient' : ''}"><span class="text-lg">🤖</span><span class="text-xs">الذكاء</span></button>
+              <button onclick="switchPage('news')" class="flex flex-col items-center gap-1 px-3 py-1.5 rounded-xl ${currentPage === 'news' ? 'ai-gradient' : ''}"><span class="text-lg">📰</span><span class="text-xs">الأخبار</span></button>
+            </div>
+          </div>
+        </div>
+      `;
+      if (currentPage === 'analysis') setTimeout(createCharts, 100);
+    }
+
+    function renderAnalysisPage(coin, period) {
+      const enabledCount = Object.values(toolSettings).filter(t => t.enabled).length;
+      return `
+        <div class="flex gap-2 overflow-x-auto hide-scroll px-4 py-3">
+          ${coins.map(c => `<button onclick="selectCoin('${c.symbol}')" class="flex items-center gap-2 px-4 py-2 rounded-xl whitespace-nowrap ${c.symbol === currentCoin ? 'ai-gradient' : 'glass'}"><span class="text-lg">${c.icon}</span><span class="text-sm">${c.name}</span></button>`).join('')}
+        </div>
+        <div class="glass rounded-xl p-3 mx-4 mb-3">
+          <div class="flex justify-between items-center">
+            <div class="flex items-center gap-3"><span class="text-3xl">${coin?.icon || ''}</span><div><p class="font-bold">${coin?.name || ''}</p><p class="text-xs text-gray-400">${period?.label || ''} • ${enabledCount} أدوات</p></div></div>
+            <div class="text-left"><p class="text-2xl font-bold">${formatPrice(currentPrice)}</p><p class="text-sm ${priceChange >= 0 ? 'text-green-400' : 'text-red-400'}">${priceChange >= 0 ? '▲' : '▼'} ${Math.abs(priceChange).toFixed(2)}%</p></div>
+          </div>
+        </div>
+        <div class="flex gap-2 overflow-x-auto hide-scroll px-4 mb-3">${periods.map(p => `<button onclick="selectPeriod('${p.id}')" class="px-3 py-1.5 rounded-lg text-sm whitespace-nowrap ${p.id === currentPeriod ? 'ai-gradient' : 'glass'}">${p.label}</button>`).join('')}</div>
+        <div class="glass rounded-xl p-2 mx-4 mb-1"><div id="mainChart" style="height: 220px;"></div></div>
+        ${toolSettings.rsi.enabled ? `<div class="glass rounded-xl p-2 mx-4 mb-1"><div class="flex justify-between items-center px-2 mb-1"><span class="text-xs text-purple-400 font-bold">💪 RSI (${toolSettings.rsi.period})</span><span class="text-sm font-bold ${indicators.rsi < toolSettings.rsi.oversold ? 'text-green-400' : indicators.rsi > toolSettings.rsi.overbought ? 'text-red-400' : 'text-gray-300'}">${indicators.rsi?.toFixed(1) || '-'}</span></div><div id="rsiChart" style="height: 80px;"></div></div>` : ''}
+        ${toolSettings.macd.enabled ? `<div class="glass rounded-xl p-2 mx-4 mb-1"><div class="flex justify-between items-center px-2 mb-1"><span class="text-xs text-green-400 font-bold">🚀 MACD</span><span class="text-sm font-bold ${indicators.macdHist > 0 ? 'text-green-400' : 'text-red-400'}">${indicators.macdHist > 0 ? '▲ صعودي' : '▼ هبوطي'}</span></div><div id="macdChart" style="height: 80px;"></div></div>` : ''}
+        ${toolSettings.stochastic.enabled ? `<div class="glass rounded-xl p-2 mx-4 mb-1"><div class="flex justify-between items-center px-2 mb-1"><span class="text-xs text-cyan-400 font-bold">⚡ Stoch</span><span class="text-sm font-bold">K: ${indicators.stochK?.toFixed(0) || '-'}</span></div><div id="stochChart" style="height: 80px;"></div></div>` : ''}
+        <div class="px-4 mt-3 mb-3"><div class="flex justify-between items-center mb-2"><p class="text-sm text-gray-400">🔧 الأدوات المفعلة</p><button onclick="switchPage('tools')" class="text-xs text-purple-400">تعديل ←</button></div><div class="flex flex-wrap gap-2">${Object.entries(toolSettings).filter(([k, v]) => v.enabled).map(([key]) => { const names = { ema: 'EMA', rsi: 'RSI', macd: 'MACD', bollinger: 'بولنجر', vwap: 'VWAP', stochastic: 'Stoch', adx: 'ADX', fibonacci: 'فيبو', atr: 'ATR', support: 'دعم' }; return `<span class="px-2 py-1 rounded-lg text-xs bg-purple-900/50 border border-purple-600">${names[key]}</span>`; }).join('')}</div></div>
+      `;
+    }
+
+    function renderToolsPage() {
+      const s = toolSettings;
+      return `
+        <div class="px-4 py-3 space-y-3">
+          <h2 class="text-xl font-bold mb-2">🔧 أدوات التحليل</h2>
+          <p class="text-sm text-gray-400 mb-4">خصص كل أداة للحصول على تحليل دقيق</p>
+          
+          <!-- EMA -->
+          <div class="glass rounded-xl overflow-hidden">
+            <div class="flex justify-between items-center p-4 cursor-pointer" onclick="toggleExpand('ema')">
+              <div class="flex items-center gap-3"><span class="text-xl">📈</span><div><p class="font-bold">EMA - المتوسطات</p><p class="text-xs text-gray-400">المتوسط المتحرك الأسي</p></div></div>
+              <div class="flex items-center gap-2"><button onclick="event.stopPropagation(); toggleToolEnabled('ema')" class="toggle-btn px-3 py-1 rounded-lg text-sm ${s.ema.enabled ? 'active' : 'bg-gray-700'}">${s.ema.enabled ? '✓' : '○'}</button><span class="text-gray-400">${expandedTools['ema'] ? '▲' : '▼'}</span></div>
+            </div>
+            <div class="collapse-content ${expandedTools['ema'] ? 'open' : ''} px-4 pb-4">
+              <p class="text-sm text-gray-400 mb-2">اختر الفترات:</p>
+              <div class="flex flex-wrap gap-2">${[9, 20, 50, 100, 200].map(p => `<button onclick="toggleEMAPeriod(${p})" class="px-3 py-2 rounded-lg text-sm ${s.ema.periods[p] ? 'bg-blue-600' : 'bg-gray-700'}">${s.ema.periods[p] ? '✓' : '○'} ${p}</button>`).join('')}</div>
+            </div>
+          </div>
+
+          <!-- RSI -->
+          <div class="glass rounded-xl overflow-hidden">
+            <div class="flex justify-between items-center p-4 cursor-pointer" onclick="toggleExpand('rsi')">
+              <div class="flex items-center gap-3"><span class="text-xl">💪</span><div><p class="font-bold">RSI - القوة النسبية</p><p class="text-xs text-gray-400">مؤشر القوة</p></div></div>
+              <div class="flex items-center gap-2"><button onclick="event.stopPropagation(); toggleToolEnabled('rsi')" class="toggle-btn px-3 py-1 rounded-lg text-sm ${s.rsi.enabled ? 'active' : 'bg-gray-700'}">${s.rsi.enabled ? '✓' : '○'}</button><span class="text-gray-400">${expandedTools['rsi'] ? '▲' : '▼'}</span></div>
+            </div>
+            <div class="collapse-content ${expandedTools['rsi'] ? 'open' : ''} px-4 pb-4 space-y-3">
+              <div><p class="text-sm text-gray-400 mb-2">الفترة:</p><div class="flex gap-2">${[7, 14, 21].map(p => `<button onclick="updateSetting('rsi', 'period', ${p})" class="px-4 py-2 rounded-lg ${s.rsi.period === p ? 'bg-purple-600' : 'bg-gray-700'}">${p}</button>`).join('')}</div></div>
+              <div class="flex gap-4"><div><p class="text-sm text-gray-400 mb-1">مشبع بيع</p><input type="number" value="${s.rsi.oversold}" onchange="updateSetting('rsi', 'oversold', parseInt(this.value))" min="10" max="40"></div><div><p class="text-sm text-gray-400 mb-1">مشبع شراء</p><input type="number" value="${s.rsi.overbought}" onchange="updateSetting('rsi', 'overbought', parseInt(this.value))" min="60" max="90"></div></div>
+            </div>
+          </div>
+
+          <!-- MACD -->
+          <div class="glass rounded-xl overflow-hidden">
+            <div class="flex justify-between items-center p-4 cursor-pointer" onclick="toggleExpand('macd')">
+              <div class="flex items-center gap-3"><span class="text-xl">🚀</span><div><p class="font-bold">MACD</p><p class="text-xs text-gray-400">تقارب وتباعد المتوسطات</p></div></div>
+              <div class="flex items-center gap-2"><button onclick="event.stopPropagation(); toggleToolEnabled('macd')" class="toggle-btn px-3 py-1 rounded-lg text-sm ${s.macd.enabled ? 'active' : 'bg-gray-700'}">${s.macd.enabled ? '✓' : '○'}</button><span class="text-gray-400">${expandedTools['macd'] ? '▲' : '▼'}</span></div>
+            </div>
+            <div class="collapse-content ${expandedTools['macd'] ? 'open' : ''} px-4 pb-4">
+              <div class="flex gap-3"><div><p class="text-sm text-gray-400 mb-1">سريع</p><input type="number" value="${s.macd.fast}" onchange="updateSetting('macd', 'fast', parseInt(this.value))" min="5" max="20"></div><div><p class="text-sm text-gray-400 mb-1">بطيء</p><input type="number" value="${s.macd.slow}" onchange="updateSetting('macd', 'slow', parseInt(this.value))" min="15" max="35"></div><div><p class="text-sm text-gray-400 mb-1">إشارة</p><input type="number" value="${s.macd.signal}" onchange="updateSetting('macd', 'signal', parseInt(this.value))" min="5" max="15"></div></div>
+            </div>
+          </div>
+
+          <!-- Bollinger -->
+          <div class="glass rounded-xl overflow-hidden">
+            <div class="flex justify-between items-center p-4 cursor-pointer" onclick="toggleExpand('bollinger')">
+              <div class="flex items-center gap-3"><span class="text-xl">📊</span><div><p class="font-bold">بولنجر باند</p></div></div>
+              <div class="flex items-center gap-2"><button onclick="event.stopPropagation(); toggleToolEnabled('bollinger')" class="toggle-btn px-3 py-1 rounded-lg text-sm ${s.bollinger.enabled ? 'active' : 'bg-gray-700'}">${s.bollinger.enabled ? '✓' : '○'}</button><span class="text-gray-400">${expandedTools['bollinger'] ? '▲' : '▼'}</span></div>
+            </div>
+            <div class="collapse-content ${expandedTools['bollinger'] ? 'open' : ''} px-4 pb-4">
+              <div class="flex gap-4"><div><p class="text-sm text-gray-400 mb-1">الفترة</p><input type="number" value="${s.bollinger.period}" onchange="updateSetting('bollinger', 'period', parseInt(this.value))" min="10" max="50"></div><div><p class="text-sm text-gray-400 mb-1">الانحراف</p><input type="number" value="${s.bollinger.deviation}" onchange="updateSetting('bollinger', 'deviation', parseFloat(this.value))" min="1" max="3" step="0.5"></div></div>
+            </div>
+          </div>
+
+          <!-- Stochastic -->
+          <div class="glass rounded-xl overflow-hidden">
+            <div class="flex justify-between items-center p-4 cursor-pointer" onclick="toggleExpand('stochastic')">
+              <div class="flex items-center gap-3"><span class="text-xl">⚡</span><div><p class="font-bold">Stochastic</p></div></div>
+              <div class="flex items-center gap-2"><button onclick="event.stopPropagation(); toggleToolEnabled('stochastic')" class="toggle-btn px-3 py-1 rounded-lg text-sm ${s.stochastic.enabled ? 'active' : 'bg-gray-700'}">${s.stochastic.enabled ? '✓' : '○'}</button><span class="text-gray-400">${expandedTools['stochastic'] ? '▲' : '▼'}</span></div>
+            </div>
+            <div class="collapse-content ${expandedTools['stochastic'] ? 'open' : ''} px-4 pb-4 space-y-3">
+              <div class="flex gap-3"><div><p class="text-sm text-gray-400 mb-1">K</p><input type="number" value="${s.stochastic.kPeriod}" onchange="updateSetting('stochastic', 'kPeriod', parseInt(this.value))" min="5" max="21"></div><div><p class="text-sm text-gray-400 mb-1">D</p><input type="number" value="${s.stochastic.dPeriod}" onchange="updateSetting('stochastic', 'dPeriod', parseInt(this.value))" min="2" max="7"></div></div>
+              <div class="flex gap-4"><div><p class="text-sm text-gray-400 mb-1">مشبع بيع</p><input type="number" value="${s.stochastic.oversold}" onchange="updateSetting('stochastic', 'oversold', parseInt(this.value))" min="10" max="30"></div><div><p class="text-sm text-gray-400 mb-1">مشبع شراء</p><input type="number" value="${s.stochastic.overbought}" onchange="updateSetting('stochastic', 'overbought', parseInt(this.value))" min="70" max="90"></div></div>
+            </div>
+          </div>
+
+          <!-- Simple toggles -->
+          <div class="glass rounded-xl p-4 space-y-3">
+            <p class="font-bold mb-2">أدوات إضافية</p>
+            <div class="flex justify-between items-center"><div class="flex items-center gap-2"><span>⚖️</span><span>VWAP</span></div><button onclick="toggleToolEnabled('vwap')" class="toggle-btn px-3 py-1 rounded-lg text-sm ${s.vwap.enabled ? 'active' : 'bg-gray-700'}">${s.vwap.enabled ? '✓' : '○'}</button></div>
+            <div class="flex justify-between items-center"><div class="flex items-center gap-2"><span>💎</span><span>ADX</span></div><button onclick="toggleToolEnabled('adx')" class="toggle-btn px-3 py-1 rounded-lg text-sm ${s.adx.enabled ? 'active' : 'bg-gray-700'}">${s.adx.enabled ? '✓' : '○'}</button></div>
+            <div class="flex justify-between items-center"><div class="flex items-center gap-2"><span>📉</span><span>ATR</span></div><button onclick="toggleToolEnabled('atr')" class="toggle-btn px-3 py-1 rounded-lg text-sm ${s.atr.enabled ? 'active' : 'bg-gray-700'}">${s.atr.enabled ? '✓' : '○'}</button></div>
+            <div class="flex justify-between items-center"><div class="flex items-center gap-2"><span>🔢</span><span>فيبوناتشي</span></div><button onclick="toggleToolEnabled('fibonacci')" class="toggle-btn px-3 py-1 rounded-lg text-sm ${s.fibonacci.enabled ? 'active' : 'bg-gray-700'}">${s.fibonacci.enabled ? '✓' : '○'}</button></div>
+            <div class="flex justify-between items-center"><div class="flex items-center gap-2"><span>🎯</span><span>دعم/مقاومة</span></div><button onclick="toggleToolEnabled('support')" class="toggle-btn px-3 py-1 rounded-lg text-sm ${s.support.enabled ? 'active' : 'bg-gray-700'}">${s.support.enabled ? '✓' : '○'}</button></div>
+          </div>
+          <button onclick="resetSettings()" class="w-full py-3 rounded-xl glass text-red-400">🔄 إعادة الافتراضي</button>
+        </div>
+      `;
+    }
+
+    function renderAIPage() {
+      const analysis = doSmartAnalysis();
+      const prediction = calculatePrediction(calcAmount, calcPeriod);
+      const selectedCoin = coins.find(c => c.symbol === currentCoin);
+      const enabledCount = Object.values(toolSettings).filter(t => t.enabled).length;
+      return `
+        <div class="px-4 py-3 space-y-4">
+          <div class="flex gap-2 overflow-x-auto hide-scroll -mx-4 px-4">${coins.map(c => `<button onclick="selectCoin('${c.symbol}')" class="flex items-center gap-2 px-4 py-2 rounded-xl whitespace-nowrap ${c.symbol === currentCoin ? 'ai-gradient' : 'glass'}"><span class="text-lg">${c.icon}</span><span class="text-sm">${c.name}</span></button>`).join('')}</div>
+          <div class="glass rounded-xl p-4"><div class="flex justify-between items-center"><div><p class="text-gray-400 text-sm">${selectedCoin?.name || ''}</p><p class="text-3xl font-bold">${formatPrice(currentPrice)}</p></div><div class="text-left"><p class="text-sm ${priceChange >= 0 ? 'text-green-400' : 'text-red-400'}">${priceChange >= 0 ? '▲' : '▼'} ${Math.abs(priceChange).toFixed(2)}%</p><p class="text-xs text-purple-400">${enabledCount} أدوات مفعلة</p></div></div></div>
+          ${fearGreedData ? `<div class="rounded-xl p-4 ${fearGreedData.value < 25 ? 'bg-red-900/30 border border-red-600' : fearGreedData.value > 75 ? 'bg-green-900/30 border border-green-600' : 'bg-yellow-900/30 border border-yellow-600'}"><div class="flex justify-between items-center"><div><p class="text-sm text-gray-400">🎭 الخوف والطمع</p><p class="text-2xl font-bold">${fearGreedData.value}</p><p class="text-sm">${fearGreedData.classification_ar}</p></div><div class="text-4xl">${fearGreedData.value < 25 ? '😱' : fearGreedData.value < 45 ? '😰' : fearGreedData.value < 55 ? '😐' : fearGreedData.value < 75 ? '😊' : '🤑'}</div></div></div>` : ''}
+          <div class="rounded-xl p-4 text-center bg-gradient-to-r ${analysis.bgColor}"><p class="text-4xl mb-2">${analysis.emoji}</p><p class="text-3xl font-bold">${analysis.decision}</p><p class="text-lg mt-1">الثقة: ${analysis.confidence}%</p><div class="flex justify-center gap-4 mt-2 text-sm"><span>🟢 ${analysis.bullish.toFixed(1)}</span><span>🔴 ${analysis.bearish.toFixed(1)}</span></div></div>
+          <div class="glass rounded-xl p-4"><p class="text-sm text-gray-400 mb-2">🧠 ملخص التحليل:</p><p class="text-sm">${analysis.analysis || 'فعّل المزيد من الأدوات للحصول على تحليل أفضل'}</p></div>
+          ${analysis.comparison.length > 0 ? `<div class="glass rounded-xl p-4"><p class="text-sm text-gray-400 mb-2">📊 مقارنة المؤشرات:</p><div class="space-y-2">${analysis.comparison.map(c => `<div class="flex justify-between items-center p-2 rounded-lg ${c.good ? 'bg-green-900/30' : 'bg-red-900/30'}"><span class="font-bold text-sm">${c.tool}</span><span>${c.good ? '✅' : '❌'} ${c.result}</span></div>`).join('')}</div></div>` : ''}
+          <div class="glass rounded-xl p-4"><p class="text-sm text-gray-400 mb-2">🎯 نقاط الدخول:</p><div class="grid grid-cols-2 gap-2"><div class="bg-blue-900/30 rounded-lg p-2 text-center"><p class="text-xs text-blue-300">📍 دخول</p><p class="font-bold">${formatPrice(analysis.entry)}</p></div><div class="bg-red-900/30 rounded-lg p-2 text-center"><p class="text-xs text-red-300">🛑 وقف</p><p class="font-bold">${formatPrice(analysis.stopLoss)}</p></div><div class="bg-green-900/30 rounded-lg p-2 text-center"><p class="text-xs text-green-300">🎯 هدف 1</p><p class="font-bold">${formatPrice(analysis.target1)}</p></div><div class="bg-green-900/40 rounded-lg p-2 text-center"><p class="text-xs text-green-300">🎯 هدف 2</p><p class="font-bold">${formatPrice(analysis.target2)}</p></div></div></div>
+          ${analysis.warnings ? `<div class="bg-yellow-900/30 border border-yellow-600/50 rounded-xl p-4"><p class="text-sm text-yellow-400 mb-1">⚠️ تحذيرات:</p><p class="text-yellow-200 text-sm">${analysis.warnings}</p></div>` : ''}
+          <div class="glass rounded-xl p-4"><p class="text-lg font-bold mb-4 text-center">🧮 حاسبة الأرباح</p><div class="mb-4"><label class="text-sm text-gray-400 block mb-2">💵 المبلغ</label><input type="number" id="calcAmount" value="${calcAmount}" onchange="updateCalcAmount(this.value)" class="w-full" style="width:100%" placeholder="أدخل المبلغ" min="1"></div><div class="mb-4"><label class="text-sm text-gray-400 block mb-2">⏰ الفترة</label><div class="flex gap-2 flex-wrap">${calcPeriods.map(p => `<button onclick="updateCalcPeriod('${p.id}')" class="px-3 py-2 rounded-lg text-sm ${p.id === calcPeriod ? 'ai-gradient' : 'glass'}">${p.label}</button>`).join('')}</div></div>${prediction ? `<div class="space-y-2 mt-4"><div class="bg-green-900/30 border border-green-600/50 rounded-xl p-3"><div class="flex justify-between items-center"><div><p class="text-xs text-green-300">🚀 متفائل</p><p class="text-xl font-bold text-green-400">${formatUSD(prediction.optimistic.value)}</p></div><p class="text-green-400 font-bold">+${prediction.optimistic.change.toFixed(2)}%</p></div></div><div class="bg-blue-900/30 border border-blue-600/50 rounded-xl p-3"><div class="flex justify-between items-center"><div><p class="text-xs text-blue-300">📊 متوقع</p><p class="text-xl font-bold text-blue-400">${formatUSD(prediction.realistic.value)}</p></div><p class="text-blue-400 font-bold">${prediction.realistic.change >= 0 ? '+' : ''}${prediction.realistic.change.toFixed(2)}%</p></div></div><div class="bg-red-900/30 border border-red-600/50 rounded-xl p-3"><div class="flex justify-between items-center"><div><p class="text-xs text-red-300">⚠️ متشائم</p><p class="text-xl font-bold text-red-400">${formatUSD(prediction.pessimistic.value)}</p></div><p class="text-red-400 font-bold">${prediction.pessimistic.change.toFixed(2)}%</p></div></div></div>` : ''}</div>
+        </div>
+      `;
+    }
+
+    function renderNewsPage() {
+      const filteredNews = newsFilter === 'all' ? newsData : newsData.filter(n => n.category === newsFilter);
+      const positive = newsData.filter(n => n.sentiment === 'positive').length;
+      const negative = newsData.filter(n => n.sentiment === 'negative').length;
+      const cats = [{ id: 'all', label: 'الكل', icon: '📋' }, { id: 'regulation', label: 'قرارات', icon: '⚖️' }, { id: 'politics', label: 'سياسة', icon: '🏛️' }, { id: 'market', label: 'السوق', icon: '📊' }, { id: 'adoption', label: 'تبني', icon: '🚀' }];
+      return `
+        <div class="px-4 py-3">
+          <div class="flex justify-between items-center mb-4"><h2 class="text-xl font-bold">📰 أخبار السوق</h2><button onclick="loadNews()" class="p-2 glass rounded-lg ${newsLoading ? 'animate-spin' : ''}">🔄</button></div>
+          ${fearGreedData ? `<div class="rounded-xl p-4 mb-4 ${fearGreedData.value < 25 ? 'bg-gradient-to-r from-red-900/50 to-red-800/50' : fearGreedData.value > 75 ? 'bg-gradient-to-r from-green-900/50 to-green-800/50' : 'bg-gradient-to-r from-yellow-900/50 to-yellow-800/50'}"><div class="flex items-center justify-between"><div><p class="font-bold">🎭 الخوف والطمع</p><p class="text-3xl font-bold">${fearGreedData.value}</p></div><span class="text-5xl">${fearGreedData.value < 25 ? '😱' : fearGreedData.value < 45 ? '😰' : fearGreedData.value < 55 ? '😐' : fearGreedData.value < 75 ? '😊' : '🤑'}</span></div></div>` : ''}
+          <div class="glass rounded-xl p-3 mb-4"><div class="flex gap-4 text-sm justify-center"><span class="text-green-400">🟢 ${positive}</span><span class="text-red-400">🔴 ${negative}</span></div></div>
+          <div class="flex gap-2 overflow-x-auto hide-scroll mb-4 -mx-4 px-4">${cats.map(cat => `<button onclick="setNewsFilter('${cat.id}')" class="flex items-center gap-1 px-3 py-2 rounded-lg text-sm whitespace-nowrap ${newsFilter === cat.id ? 'ai-gradient' : 'glass'}"><span>${cat.icon}</span><span>${cat.label}</span></button>`).join('')}</div>
+          <div class="space-y-3">${newsLoading ? '<p class="text-center text-gray-400 py-8">⏳ جاري التحميل...</p>' : ''}${!newsLoading && filteredNews.length === 0 ? '<p class="text-center text-gray-400 py-8">لا توجد أخبار</p>' : ''}${filteredNews.map(item => `<div class="rounded-xl p-4 border ${item.sentiment === 'positive' ? 'bg-green-900/30 border-green-600' : item.sentiment === 'negative' ? 'bg-red-900/30 border-red-600' : 'bg-gray-800 border-gray-600'}"><div class="flex items-start gap-3"><div class="text-2xl">${item.icon || '📰'}</div><div class="flex-1"><div class="flex items-center gap-2 mb-1 flex-wrap"><span class="px-2 py-0.5 rounded text-xs ${item.sentiment === 'positive' ? 'bg-green-600' : item.sentiment === 'negative' ? 'bg-red-600' : 'bg-gray-600'}">${item.sentiment === 'positive' ? '📈' : item.sentiment === 'negative' ? '📉' : '📊'}</span><span class="px-2 py-0.5 rounded text-xs bg-purple-600">${item.categoryAr || 'عام'}</span></div><p class="font-bold text-sm mb-1">${item.title}</p><p class="text-xs text-gray-400">${item.source} • ${item.timeAgo}</p>${item.impactAr ? `<p class="text-xs mt-1 text-gray-300">💡 ${item.impactAr}</p>` : ''}</div></div></div>`).join('')}</div>
+        </div>
+      `;
+    }
+
+    function createCharts() {
+      if (!chartData.length) return;
+      const s = toolSettings;
+      const mainContainer = document.getElementById('mainChart');
+      if (mainContainer) {
+        if (mainChart) { mainChart.remove(); mainChart = null; }
+        mainChart = LightweightCharts.createChart(mainContainer, { width: mainContainer.clientWidth, height: 220, layout: { background: { type: 'solid', color: 'transparent' }, textColor: '#9ca3af' }, grid: { vertLines: { color: 'rgba(255,255,255,0.03)' }, horzLines: { color: 'rgba(255,255,255,0.03)' } }, rightPriceScale: { borderColor: 'rgba(255,255,255,0.1)' }, timeScale: { borderColor: 'rgba(255,255,255,0.1)', timeVisible: true } });
+        mainChart.addCandlestickSeries({ upColor: '#22c55e', downColor: '#ef4444', borderUpColor: '#22c55e', borderDownColor: '#ef4444', wickUpColor: '#22c55e', wickDownColor: '#ef4444' }).setData(chartData);
+        if (s.ema.enabled && indicators.emaData) { const colors = { 9: '#f97316', 20: '#3b82f6', 50: '#22c55e', 100: '#a855f7', 200: '#eab308' }; Object.entries(s.ema.periods).forEach(([p, en]) => { if (en && indicators.emaData[p]) mainChart.addLineSeries({ color: colors[p], lineWidth: 2 }).setData(indicators.emaData[p].map((v, i) => v ? { time: chartData[i].time, value: v } : null).filter(Boolean)); }); }
+        if (s.bollinger.enabled && indicators.bollingerData) { mainChart.addLineSeries({ color: '#ec4899', lineWidth: 1 }).setData(indicators.bollingerData.upper.map((v, i) => v ? { time: chartData[i].time, value: v } : null).filter(Boolean)); mainChart.addLineSeries({ color: '#ec4899', lineWidth: 1 }).setData(indicators.bollingerData.lower.map((v, i) => v ? { time: chartData[i].time, value: v } : null).filter(Boolean)); }
+        if (s.vwap.enabled && indicators.vwapData) mainChart.addLineSeries({ color: '#06b6d4', lineWidth: 2, lineStyle: 2 }).setData(indicators.vwapData.map((v, i) => v ? { time: chartData[i].time, value: v } : null).filter(Boolean));
+        mainChart.timeScale().fitContent();
+      }
+      if (s.rsi.enabled && indicators.rsiData) { const c = document.getElementById('rsiChart'); if (c) { if (rsiChart) { rsiChart.remove(); rsiChart = null; } rsiChart = LightweightCharts.createChart(c, { width: c.clientWidth, height: 80, layout: { background: { type: 'solid', color: 'transparent' }, textColor: '#9ca3af' }, grid: { vertLines: { color: 'rgba(255,255,255,0.02)' }, horzLines: { color: 'rgba(255,255,255,0.02)' } }, rightPriceScale: { borderColor: 'rgba(255,255,255,0.1)' }, timeScale: { visible: false } }); rsiChart.addLineSeries({ color: '#8b5cf6', lineWidth: 2 }).setData(indicators.rsiData.map((v, i) => v ? { time: chartData[i].time, value: v } : null).filter(Boolean)); rsiChart.addLineSeries({ color: '#ef4444', lineWidth: 1, lineStyle: 2 }).setData(chartData.map(d => ({ time: d.time, value: s.rsi.overbought }))); rsiChart.addLineSeries({ color: '#22c55e', lineWidth: 1, lineStyle: 2 }).setData(chartData.map(d => ({ time: d.time, value: s.rsi.oversold }))); rsiChart.timeScale().fitContent(); } }
+      if (s.macd.enabled && indicators.macdData) { const c = document.getElementById('macdChart'); if (c) { if (macdChart) { macdChart.remove(); macdChart = null; } macdChart = LightweightCharts.createChart(c, { width: c.clientWidth, height: 80, layout: { background: { type: 'solid', color: 'transparent' }, textColor: '#9ca3af' }, grid: { vertLines: { color: 'rgba(255,255,255,0.02)' }, horzLines: { color: 'rgba(255,255,255,0.02)' } }, rightPriceScale: { borderColor: 'rgba(255,255,255,0.1)' }, timeScale: { visible: false } }); macdChart.addHistogramSeries({ color: '#22c55e' }).setData(indicators.macdData.histogram.map((v, i) => v !== null ? { time: chartData[i].time, value: v, color: v >= 0 ? '#22c55e' : '#ef4444' } : null).filter(Boolean)); macdChart.addLineSeries({ color: '#3b82f6', lineWidth: 2 }).setData(indicators.macdData.macdLine.map((v, i) => v ? { time: chartData[i].time, value: v } : null).filter(Boolean)); macdChart.addLineSeries({ color: '#f59e0b', lineWidth: 2 }).setData(indicators.macdData.signalLine.map((v, i) => v ? { time: chartData[i].time, value: v } : null).filter(Boolean)); macdChart.timeScale().fitContent(); } }
+      if (s.stochastic.enabled && indicators.stochData) { const c = document.getElementById('stochChart'); if (c) { if (stochChart) { stochChart.remove(); stochChart = null; } stochChart = LightweightCharts.createChart(c, { width: c.clientWidth, height: 80, layout: { background: { type: 'solid', color: 'transparent' }, textColor: '#9ca3af' }, grid: { vertLines: { color: 'rgba(255,255,255,0.02)' }, horzLines: { color: 'rgba(255,255,255,0.02)' } }, rightPriceScale: { borderColor: 'rgba(255,255,255,0.1)' }, timeScale: { visible: false } }); stochChart.addLineSeries({ color: '#06b6d4', lineWidth: 2 }).setData(indicators.stochData.k.map((v, i) => v ? { time: chartData[i].time, value: v } : null).filter(Boolean)); stochChart.addLineSeries({ color: '#f59e0b', lineWidth: 2 }).setData(indicators.stochData.d.map((v, i) => v ? { time: chartData[i].time, value: v } : null).filter(Boolean)); stochChart.addLineSeries({ color: '#ef4444', lineWidth: 1, lineStyle: 2 }).setData(chartData.map(d => ({ time: d.time, value: s.stochastic.overbought }))); stochChart.addLineSeries({ color: '#22c55e', lineWidth: 1, lineStyle: 2 }).setData(chartData.map(d => ({ time: d.time, value: s.stochastic.oversold }))); stochChart.timeScale().fitContent(); } }
+    }
+
+    async function fetchData() {
+      const period = periods.find(p => p.id === currentPeriod);
+      if (!period) return;
+      try {
+        const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${currentCoin}&interval=${period.interval}&limit=${period.limit}`);
+        const json = await res.json();
+        chartData = json.map(c => ({ time: Math.floor(c[0] / 1000), open: parseFloat(c[1]), high: parseFloat(c[2]), low: parseFloat(c[3]), close: parseFloat(c[4]), volume: parseFloat(c[5]) }));
+        if (chartData.length > 0) { currentPrice = chartData[chartData.length - 1].close; priceChange = ((chartData[chartData.length - 1].close - chartData[0].open) / chartData[0].open) * 100; }
+        calculateIndicators(); render();
+      } catch (e) { console.error(e); }
+    }
+
+    async function loadFearGreed() {
+      try {
+        const res = await fetch('https://api.alternative.me/fng/?limit=1');
+        const data = await res.json();
+        if (data?.data?.[0]) { const fg = data.data[0]; fearGreedData = { value: parseInt(fg.value), classification_ar: { 'Extreme Fear': 'خوف شديد', 'Fear': 'خوف', 'Neutral': 'محايد', 'Greed': 'طمع', 'Extreme Greed': 'طمع شديد' }[fg.value_classification] || fg.value_classification }; }
+      } catch (e) { console.error(e); }
+    }
+
+    async function loadNews() {
+      newsLoading = true; if (currentPage === 'news') render();
+      const fallback = [
+        { title: 'الفيدرالي يثبت الفائدة', sentiment: 'positive', category: 'regulation', categoryAr: 'قرارات', icon: '🏛️', source: 'Fed', impactAr: 'إيجابي', timeAgo: 'منذ 2س' },
+        { title: 'SEC توافق على ETF جديد', sentiment: 'positive', category: 'regulation', categoryAr: 'قرارات', icon: '✅', source: 'SEC', impactAr: 'إيجابي قوي', timeAgo: 'منذ 5س' },
+        { title: 'BlackRock تشتري BTC', sentiment: 'positive', category: 'adoption', categoryAr: 'تبني', icon: '🏦', source: 'Bloomberg', impactAr: 'ثقة مؤسسات', timeAgo: 'منذ يوم' },
+        { title: 'تصعيد جيوسياسي', sentiment: 'negative', category: 'politics', categoryAr: 'سياسة', icon: '⚠️', source: 'Reuters', impactAr: 'سلبي مؤقت', timeAgo: 'منذ 3س' },
+      ];
+      try {
+        const res = await fetch('https://min-api.cryptocompare.com/data/v2/news/?lang=EN&categories=BTC,ETH,Trading,Regulation');
+        const data = await res.json();
+        if (data?.Data?.length > 0) {
+          newsData = data.Data.slice(0, 10).map(item => {
+            const t = item.title.toLowerCase();
+            let sentiment = 'neutral', category = 'market', categoryAr = 'السوق', icon = '📰', impactAr = '';
+            if (t.match(/surge|rally|bull|gain|rise|approve|adopt|buy|bullish|record|high/)) { sentiment = 'positive'; impactAr = 'إيجابي'; }
+            else if (t.match(/crash|drop|bear|fall|ban|hack|fear|sell|bearish/)) { sentiment = 'negative'; impactAr = 'سلبي'; }
+            if (t.match(/sec|regulation|law|fed|policy/)) { category = 'regulation'; categoryAr = 'قرارات'; icon = '⚖️'; }
+            else if (t.match(/war|trump|biden|election|sanction/)) { category = 'politics'; categoryAr = 'سياسة'; icon = '🏛️'; }
+            else if (t.match(/etf|institutional|blackrock|adopt/)) { category = 'adoption'; categoryAr = 'تبني'; icon = '🚀'; }
+            const secs = Math.floor((Date.now() - item.published_on * 1000) / 1000);
+            let timeAgo = 'الآن'; if (secs >= 86400) timeAgo = 'منذ ' + Math.floor(secs / 86400) + ' ي'; else if (secs >= 3600) timeAgo = 'منذ ' + Math.floor(secs / 3600) + ' س'; else if (secs >= 60) timeAgo = 'منذ ' + Math.floor(secs / 60) + ' د';
+            return { title: item.title, sentiment, category, categoryAr, icon, source: item.source_info?.name || 'CryptoCompare', impactAr, timeAgo };
+          });
+        } else newsData = fallback;
+      } catch (e) { newsData = fallback; }
+      newsLoading = false; if (currentPage === 'news') render();
+    }
+
+    function toggleToolEnabled(tool) { toolSettings[tool].enabled = !toolSettings[tool].enabled; calculateIndicators(); render(); }
+    function toggleEMAPeriod(period) { toolSettings.ema.periods[period] = !toolSettings.ema.periods[period]; calculateIndicators(); render(); }
+    function updateSetting(tool, key, value) { toolSettings[tool][key] = value; calculateIndicators(); render(); }
+    function toggleExpand(tool) { expandedTools[tool] = !expandedTools[tool]; render(); }
+    function resetSettings() { toolSettings = { ema: { enabled: true, periods: { 9: true, 20: true, 50: true, 100: false, 200: true } }, rsi: { enabled: true, period: 14, oversold: 30, overbought: 70 }, macd: { enabled: true, fast: 12, slow: 26, signal: 9 }, bollinger: { enabled: false, period: 20, deviation: 2 }, vwap: { enabled: false }, stochastic: { enabled: false, kPeriod: 14, dPeriod: 3, oversold: 20, overbought: 80 }, adx: { enabled: false, period: 14 }, fibonacci: { enabled: false }, atr: { enabled: false, period: 14 }, support: { enabled: false } }; calculateIndicators(); render(); }
+    function selectCoin(symbol) { currentCoin = symbol; fetchData(); }
+    function selectPeriod(id) { currentPeriod = id; fetchData(); }
+    function switchPage(page) { currentPage = page; render(); }
+    function updateCalcAmount(v) { calcAmount = parseFloat(v) || 100; render(); }
+    function updateCalcPeriod(id) { calcPeriod = id; render(); }
+    function setNewsFilter(id) { newsFilter = id; render(); }
+
+    window.selectCoin = selectCoin; window.selectPeriod = selectPeriod; window.switchPage = switchPage; window.loadNews = loadNews;
+    window.updateCalcAmount = updateCalcAmount; window.updateCalcPeriod = updateCalcPeriod; window.setNewsFilter = setNewsFilter;
+    window.toggleToolEnabled = toggleToolEnabled; window.toggleEMAPeriod = toggleEMAPeriod; window.updateSetting = updateSetting;
+    window.toggleExpand = toggleExpand; window.resetSettings = resetSettings;
+
+    window.addEventListener('resize', () => {
+      if (mainChart) mainChart.applyOptions({ width: document.getElementById('mainChart')?.clientWidth || 0 });
+      if (rsiChart) rsiChart.applyOptions({ width: document.getElementById('rsiChart')?.clientWidth || 0 });
+      if (macdChart) macdChart.applyOptions({ width: document.getElementById('macdChart')?.clientWidth || 0 });
+      if (stochChart) stochChart.applyOptions({ width: document.getElementById('stochChart')?.clientWidth || 0 });
+    });
+
+    fetchData(); loadFearGreed(); loadNews();
+  </script>
+</body>
+</html>
